@@ -1,0 +1,102 @@
+import { describe, expect, it } from 'vitest';
+import { createSupabaseAuthVerifier } from '../../packages/server/src/auth.js';
+
+const authUserId = '11111111-1111-4111-8111-111111111111';
+
+function accessToken(overrides: Record<string, unknown> = {}): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      sub: authUserId,
+      exp: Math.floor(Date.now() / 1000) + 600,
+      aal: 'aal2',
+      session_id: '22222222-2222-4222-8222-222222222222',
+      ...overrides,
+    }),
+  ).toString('base64url');
+  return `eyJhbGciOiJub25lIn0.${payload}.provider-validated-signature`;
+}
+
+function providerFetch(expectedToken: string, response: Response): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (
+      String(input) !== 'https://project.supabase.co/auth/v1/user' ||
+      headers.get('apikey') !== 'sb_publishable_example' ||
+      headers.get('authorization') !== `Bearer ${expectedToken}`
+    ) {
+      return new Response(null, { status: 401 });
+    }
+    return response;
+  }) as typeof fetch;
+}
+
+describe('Supabase access-token verifier', () => {
+  it('returns a minimal identity only after the provider validates the same token', async () => {
+    const token = accessToken();
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'operator@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+          user_metadata: { operator: true },
+        }),
+      ),
+    });
+
+    await expect(verifier.verify(token)).resolves.toEqual({
+      authUserId,
+      email: 'operator@example.test',
+      emailVerified: true,
+      sessionId: '22222222-2222-4222-8222-222222222222',
+      aal: 'aal2',
+    });
+  });
+
+  it('treats provider rejection as unauthenticated', async () => {
+    const token = accessToken();
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(token, new Response(null, { status: 401 })),
+    });
+
+    await expect(verifier.verify(token)).resolves.toBeNull();
+  });
+
+  it.each([
+    ['expired token', { exp: Math.floor(Date.now() / 1000) - 1 }],
+    ['mismatched subject', { sub: '33333333-3333-4333-8333-333333333333' }],
+    ['unsupported assurance', { aal: 'aal3' }],
+  ])('rejects a provider response paired with an %s', async (_label, overrides) => {
+    const token = accessToken(overrides);
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'player@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+        }),
+      ),
+    });
+
+    await expect(verifier.verify(token)).resolves.toBeNull();
+  });
+
+  it('rejects malformed provider user data and malformed JWT payloads', async () => {
+    const malformedToken = 'not-a-jwt';
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(malformedToken, Response.json({ id: authUserId })),
+    });
+
+    await expect(verifier.verify(malformedToken)).resolves.toBeNull();
+  });
+});

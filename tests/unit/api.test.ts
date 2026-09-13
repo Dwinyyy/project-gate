@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../apps/api/src/app.js';
+import type { AuthIdentity } from '../../packages/server/src/auth.js';
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
@@ -70,4 +71,100 @@ describe('foundation API trust boundaries', () => {
     expect(response.body).not.toMatch(/owner|secret|postgresql|stack/);
     expect(response.json()).toMatchObject({ error: { code: 'INTERNAL_ERROR' } });
   });
+
+  it('returns only public Auth bootstrap configuration', async () => {
+    const app = buildApp({
+      logger: false,
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: { verify: async () => null },
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject('/v1/auth/config');
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      supabaseUrl: 'https://project.supabase.co',
+      supabasePublishableKey: 'sb_publishable_example',
+    });
+    expect(response.body).not.toMatch(/service.role|database|password|secret/i);
+  });
+
+  it('fails closed when account Auth is not configured', async () => {
+    const app = buildApp({ logger: false });
+    apps.push(app);
+
+    expect((await app.inject('/v1/auth/config')).statusCode).toBe(503);
+    expect(
+      (
+        await app.inject({
+          url: '/v1/auth/session',
+          headers: { authorization: 'Bearer unavailable-token' },
+        })
+      ).statusCode,
+    ).toBe(503);
+  });
+
+  it('returns a server-validated self session without provider metadata', async () => {
+    const identity: AuthIdentity = {
+      authUserId: '11111111-1111-4111-8111-111111111111',
+      email: 'player@example.test',
+      emailVerified: true,
+      sessionId: '22222222-2222-4222-8222-222222222222',
+      aal: 'aal1',
+    };
+    const app = buildApp({
+      logger: false,
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async (token) => (token === 'valid-session-token' ? identity : null),
+        },
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      url: '/v1/auth/session',
+      headers: { authorization: 'Bearer valid-session-token' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(identity);
+    expect(response.body).not.toMatch(/user_metadata|provider|refresh/i);
+  });
+
+  it.each([undefined, '', 'Basic credentials', 'Bearer ', `Bearer ${'x'.repeat(8193)}`])(
+    'rejects malformed bearer authorization %s',
+    async (authorization) => {
+      const app = buildApp({
+        logger: false,
+        auth: {
+          publicConfig: {
+            supabaseUrl: 'https://project.supabase.co',
+            supabasePublishableKey: 'sb_publishable_example',
+          },
+          verifier: {
+            verify: async () => {
+              throw new Error('Malformed authorization reached the provider verifier');
+            },
+          },
+        },
+      });
+      apps.push(app);
+
+      const response = await app.inject({
+        url: '/v1/auth/session',
+        ...(authorization === undefined ? {} : { headers: { authorization } }),
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ error: { code: 'AUTH_REQUIRED' } });
+    },
+  );
 });

@@ -47,7 +47,7 @@
 - Produces: `GET /v1/auth/config` and authenticated `GET /v1/auth/session`.
 - Consumes: `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`, which must be configured together.
 
-- [ ] **Step 1: Write failing environment and verifier tests**
+- [x] **Step 1: Write failing environment and verifier tests**
 
 ```ts
 expect(() => parseEnvironment({ SUPABASE_URL: 'https://project.supabase.co' })).toThrow(
@@ -60,13 +60,13 @@ await expect(verifier.verify('validated-token')).resolves.toMatchObject({
 await expect(verifier.verify('rejected-token')).resolves.toBeNull();
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm they fail because the auth interfaces do not exist**
+- [x] **Step 2: Run the focused tests and confirm they fail because the auth interfaces do not exist**
 
 Run: `pnpm exec vitest run tests/unit/environment.test.ts tests/unit/auth-verifier.test.ts`
 
 Expected: failure from missing auth environment properties/module, not a syntax or fixture error.
 
-- [ ] **Step 3: Add strict public schemas and environment validation**
+- [x] **Step 3: Add strict public schemas and environment validation**
 
 ```ts
 export interface AuthIdentity {
@@ -84,11 +84,11 @@ export interface AuthVerifier {
 
 Validate an HTTPS Supabase URL in production, reject partial configuration, and keep the publishable key out of structured logs.
 
-- [ ] **Step 4: Implement provider validation against `/auth/v1/user`**
+- [x] **Step 4: Implement provider validation against `/auth/v1/user`**
 
 Send the candidate token only in `Authorization: Bearer ...` and the publishable key only in `apikey`. Treat non-200, malformed JSON, missing UUID, subject mismatch, expired claims, or unsupported assurance levels as unauthenticated. Parse `aal` and `session_id` only from the same token after the provider validates it and confirm its `sub` matches the returned user ID.
 
-- [ ] **Step 5: Add failing API boundary tests**
+- [x] **Step 5: Add failing API boundary tests**
 
 ```ts
 expect((await app.inject('/v1/auth/config')).statusCode).toBe(200);
@@ -103,23 +103,23 @@ expect(
 ).toMatchObject({ authUserId: validIdentity.authUserId, aal: 'aal1' });
 ```
 
-- [ ] **Step 6: Run the API test and confirm the new routes fail before implementation**
+- [x] **Step 6: Run the API test and confirm the new routes fail before implementation**
 
 Run: `pnpm exec vitest run tests/unit/api.test.ts`
 
 Expected: `/v1/auth/config` is 404 and `/v1/auth/session` has no authenticated behavior.
 
-- [ ] **Step 7: Implement runtime config and bearer-only session routes**
+- [x] **Step 7: Implement runtime config and bearer-only session routes**
 
 Reject missing, duplicate, non-Bearer, empty, or oversized authorization values. Give auth routes a narrower rate-limit bucket than the global API limit. Return safe error codes with request IDs and `Cache-Control: no-store`.
 
-- [ ] **Step 8: Verify the first server slice**
+- [x] **Step 8: Verify the first server slice**
 
 Run: `pnpm exec vitest run tests/unit/environment.test.ts tests/unit/auth-verifier.test.ts tests/unit/api.test.ts`
 
 Expected: all focused tests pass with no warnings.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/contracts/src/auth.ts packages/contracts/src/index.ts packages/server/src/auth.ts packages/server/src/environment.ts packages/server/src/index.ts apps/api/src/app.ts apps/api/src/index.ts tests/unit/auth-verifier.test.ts tests/unit/environment.test.ts tests/unit/api.test.ts

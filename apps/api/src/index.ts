@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { createDatabase } from '@hunter-world/database';
-import { databaseTls, parseEnvironment } from '@hunter-world/server';
+import { createSupabaseAuthVerifier, databaseTls, parseEnvironment } from '@hunter-world/server';
 import { buildApp } from './app.js';
 
 async function main() {
@@ -11,7 +11,24 @@ async function main() {
         ssl: await databaseTls(environment),
       })
     : undefined;
-  const app = buildApp({ logger: true, ...(database ? { database } : {}) });
+  const auth =
+    environment.supabaseUrl && environment.supabasePublishableKey
+      ? {
+          publicConfig: {
+            supabaseUrl: environment.supabaseUrl,
+            supabasePublishableKey: environment.supabasePublishableKey,
+          },
+          verifier: createSupabaseAuthVerifier({
+            supabaseUrl: environment.supabaseUrl,
+            publishableKey: environment.supabasePublishableKey,
+          }),
+        }
+      : undefined;
+  const app = buildApp({
+    logger: true,
+    ...(database ? { database } : {}),
+    ...(auth ? { auth } : {}),
+  });
   if (database) app.addHook('onClose', () => database.close());
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {

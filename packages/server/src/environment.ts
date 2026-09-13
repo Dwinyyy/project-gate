@@ -5,6 +5,8 @@ export interface ServerEnvironment {
   databaseUrl?: string;
   databaseSsl: boolean;
   databaseSslCaPath?: string;
+  supabaseUrl?: string;
+  supabasePublishableKey?: string;
 }
 
 function booleanSetting(source: Record<string, string | undefined>, key: string): boolean {
@@ -50,6 +52,31 @@ export function parseEnvironment(source: Record<string, string | undefined>): Se
       throw new Error('Use DATABASE_SSL instead of SSL query parameters in DATABASE_URL');
     }
   }
+  const rawSupabaseUrl = source.SUPABASE_URL?.trim();
+  const supabasePublishableKey = source.SUPABASE_PUBLISHABLE_KEY?.trim();
+  if (Boolean(rawSupabaseUrl) !== Boolean(supabasePublishableKey)) {
+    throw new Error('SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured together');
+  }
+  if (nodeEnv === 'production' && (!rawSupabaseUrl || !supabasePublishableKey)) {
+    throw new Error('SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required in production');
+  }
+  let supabaseUrl: string | undefined;
+  if (rawSupabaseUrl) {
+    let url: URL;
+    try {
+      url = new URL(rawSupabaseUrl);
+    } catch {
+      throw new Error('SUPABASE_URL must be an absolute URL');
+    }
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+      throw new Error('SUPABASE_URL must use HTTPS unless it targets loopback development');
+    }
+    if (url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+      throw new Error('SUPABASE_URL must contain only the Supabase project origin');
+    }
+    supabaseUrl = url.origin;
+  }
   const host = source.HOST ?? '127.0.0.1';
   if (!host.trim()) throw new Error('HOST must not be empty');
   return {
@@ -59,5 +86,7 @@ export function parseEnvironment(source: Record<string, string | undefined>): Se
     databaseSsl,
     ...(databaseUrl ? { databaseUrl } : {}),
     ...(databaseSslCaPath ? { databaseSslCaPath } : {}),
+    ...(supabaseUrl ? { supabaseUrl } : {}),
+    ...(supabasePublishableKey ? { supabasePublishableKey } : {}),
   };
 }

@@ -1,5 +1,12 @@
 import type { FromSchema } from 'json-schema-to-ts';
 
+export {
+  authConfigSchema,
+  selfSessionSchema,
+  type AuthConfig,
+  type SelfSession,
+} from './auth.js';
+
 export const systemStatusSchema = {
   type: 'object',
   additionalProperties: false,

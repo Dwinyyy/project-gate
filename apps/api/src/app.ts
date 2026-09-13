@@ -4,14 +4,26 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import {
+  authConfigSchema,
   systemStatusSchema,
   errorResponseSchema,
+  selfSessionSchema,
+  type AuthConfig,
+  type SelfSession,
   type SystemStatus,
 } from '@hunter-world/contracts';
+import type { AuthVerifier } from '@hunter-world/server';
 
 export interface ApiOptions {
   logger?: boolean;
   database?: { ready(): Promise<boolean> };
+  auth?: { publicConfig: AuthConfig; verifier: AuthVerifier };
+}
+
+function bearerToken(authorization: string | undefined): string | null {
+  if (!authorization || authorization.length > 8192) return null;
+  const match = /^Bearer ([^\s,]+)$/.exec(authorization);
+  return match?.[1] ?? null;
 }
 
 export function buildApp(options: ApiOptions = {}) {
@@ -68,6 +80,48 @@ export function buildApp(options: ApiOptions = {}) {
       serverTime: new Date().toISOString(),
       capabilities: { registration: false, characters: false, encounters: false, commerce: false },
     }),
+  );
+  app.get(
+    '/v1/auth/config',
+    {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+      schema: {
+        response: { 200: authConfigSchema, 503: errorResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      if (!options.auth) {
+        return reply
+          .code(503)
+          .send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
+      }
+      return reply.code(200).send(options.auth.publicConfig);
+    },
+  );
+  app.get(
+    '/v1/auth/session',
+    {
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+      schema: {
+        response: { 200: selfSessionSchema, 401: errorResponseSchema, 503: errorResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      if (!options.auth) {
+        return reply
+          .code(503)
+          .send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
+      }
+      const token = bearerToken(request.headers.authorization);
+      if (!token) {
+        return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', requestId: request.id } });
+      }
+      const identity: SelfSession | null = await options.auth.verifier.verify(token);
+      if (!identity) {
+        return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', requestId: request.id } });
+      }
+      return reply.code(200).send(identity);
+    },
   );
   // No operator identity provider exists until Task 2.1. Deny every method and path.
   app.all(

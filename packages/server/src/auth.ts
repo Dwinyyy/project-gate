@@ -1,0 +1,102 @@
+import type { AuthConfig } from '@hunter-world/contracts';
+
+export interface AuthIdentity {
+  authUserId: string;
+  email: string | null;
+  emailVerified: boolean;
+  sessionId: string | null;
+  aal: 'aal1' | 'aal2';
+}
+
+export interface AuthVerifier {
+  verify(accessToken: string): Promise<AuthIdentity | null>;
+}
+
+export interface SupabaseAuthVerifierOptions {
+  supabaseUrl: AuthConfig['supabaseUrl'];
+  publishableKey: AuthConfig['supabasePublishableKey'];
+  fetch?: typeof globalThis.fetch;
+}
+
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+interface AccessTokenClaims {
+  sub: string;
+  exp: number;
+  aal: 'aal1' | 'aal2';
+  sessionId: string | null;
+}
+
+function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
+  const parts = accessToken.split('.');
+  if (parts.length !== 3 || !parts[1]) return null;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (!value || typeof value !== 'object') return null;
+    const claims = value as Record<string, unknown>;
+    if (typeof claims.sub !== 'string' || !uuidPattern.test(claims.sub)) return null;
+    if (
+      typeof claims.exp !== 'number' ||
+      !Number.isSafeInteger(claims.exp) ||
+      claims.exp <= Math.floor(Date.now() / 1000)
+    )
+      return null;
+    if (claims.aal !== 'aal1' && claims.aal !== 'aal2') return null;
+    const sessionId = claims.session_id;
+    if (sessionId !== undefined && (typeof sessionId !== 'string' || !uuidPattern.test(sessionId)))
+      return null;
+    return {
+      sub: claims.sub,
+      exp: claims.exp,
+      aal: claims.aal,
+      sessionId: sessionId ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function createSupabaseAuthVerifier(options: SupabaseAuthVerifierOptions): AuthVerifier {
+  const fetchAuth = options.fetch ?? globalThis.fetch;
+  const userEndpoint = new URL('/auth/v1/user', options.supabaseUrl);
+  return {
+    async verify(accessToken) {
+      const claims = parseAccessTokenClaims(accessToken);
+      if (!claims) return null;
+      try {
+        const response = await fetchAuth(userEndpoint, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            apikey: options.publishableKey,
+            Authorization: `Bearer ${accessToken}`,
+          },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) return null;
+        const value: unknown = await response.json();
+        if (!value || typeof value !== 'object') return null;
+        const user = value as Record<string, unknown>;
+        if (user.id !== claims.sub) return null;
+        if (user.email !== undefined && typeof user.email !== 'string') return null;
+        if (
+          user.email_confirmed_at !== undefined &&
+          user.email_confirmed_at !== null &&
+          typeof user.email_confirmed_at !== 'string'
+        )
+          return null;
+        return {
+          authUserId: claims.sub,
+          email: user.email ?? null,
+          emailVerified:
+            typeof user.email_confirmed_at === 'string' && user.email_confirmed_at.length > 0,
+          sessionId: claims.sessionId,
+          aal: claims.aal,
+        };
+      } catch {
+        return null;
+      }
+    },
+  };
+}
