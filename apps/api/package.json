@@ -1,0 +1,12 @@
+{
+  "name": "@hunter-world/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fastify": "5.12.4",
+    "@hunter-world/server": "workspace:*",
+    "@hunter-world/database": "workspace:*",
+    "@hunter-world/contracts": "workspace:*"
+  }
+}

@@ -1,0 +1,16 @@
+:root {
+  --hw-bg: #080d13;
+  --hw-panel: #0e151e;
+  --hw-panel-raised: #121c26;
+  --hw-border: #21303c;
+  --hw-border-soft: #192530;
+  --hw-text: #edf3f6;
+  --hw-muted: #a3b3c1;
+  --hw-dim: #7d91a3;
+  --hw-accent: #81e9cc;
+  --hw-accent-soft: #132d2c;
+  --hw-warning: #e8b77f;
+  --hw-font: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --hw-mono: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+  --hw-radius: 8px;
+}

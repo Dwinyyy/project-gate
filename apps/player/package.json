@@ -1,0 +1,14 @@
+{
+  "name": "@hunter-world/player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router-dom": "7.18.3",
+    "@tanstack/react-query": "5.102.8",
+    "@hunter-world/client": "workspace:*",
+    "@hunter-world/ui": "workspace:*"
+  }
+}

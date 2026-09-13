@@ -1,0 +1,254 @@
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(ellipse at 50% 29%, #193c3526, transparent 53%), var(--hw-bg);
+}
+.header {
+  min-height: 94px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 22px;
+  padding: 20px 42px;
+  border-bottom: 1px solid var(--hw-border-soft);
+  background: #0a1118aa;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  color: var(--hw-accent);
+}
+.brand > span {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--hw-text);
+}
+.brand > span > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--hw-dim);
+  font: 8px var(--hw-mono);
+  letter-spacing: 0.08em;
+}
+.headerBadge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #544333;
+  border-radius: 4px;
+  padding: 7px 10px;
+  color: #d8b38d;
+  font: 8px var(--hw-mono);
+  letter-spacing: 0.06em;
+}
+.main {
+  flex: 1;
+  width: min(100%, 634px);
+  margin: 0 auto;
+  padding: 52px 24px 65px;
+  outline: none;
+}
+.eyebrow {
+  margin-bottom: 18px;
+  color: var(--hw-dim);
+  font: 9px var(--hw-mono);
+  letter-spacing: 0.12em;
+}
+.lockPanel {
+  position: relative;
+  overflow: hidden;
+  padding: 35px 42px 0;
+  border: 1px solid #304139;
+  border-radius: var(--hw-radius);
+  background: radial-gradient(ellipse at 50% 0%, #254e3840, transparent 60%), var(--hw-panel);
+  text-align: center;
+}
+.lockIllustration {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 106px;
+  height: 106px;
+  margin: 0 auto 15px;
+  color: var(--hw-accent);
+}
+.lockIllustration > div {
+  position: absolute;
+  inset: 12px;
+  border: 1px solid #49755c80;
+  transform: rotate(45deg);
+}
+.lockIllustration > div::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border: 1px solid #49755c40;
+}
+.lockIllustration > svg {
+  position: relative;
+}
+.lockPanel h1 {
+  margin: 15px 0;
+  font-size: 34px;
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  line-height: 1.25;
+}
+.description {
+  max-width: 375px;
+  margin: 0 auto;
+  color: var(--hw-muted);
+  font-size: 13px;
+  line-height: 1.85;
+}
+.boundary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 28px 0;
+  padding: 17px;
+  border: 1px solid #293631;
+  border-radius: 5px;
+  background: #0a1117;
+  color: #aebdbf;
+  font-size: 12px;
+  text-align: left;
+}
+.boundary svg {
+  color: #c9b48e;
+  margin-top: 2px;
+}
+.panelFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 0 -42px;
+  padding: 15px 23px;
+  border-top: 1px solid #293831;
+  color: var(--hw-dim);
+  font-size: 10px;
+}
+.panelFooter > span:first-child {
+  font: 8px var(--hw-mono);
+  letter-spacing: 0.06em;
+}
+.servicePanel {
+  margin-top: 19px;
+  padding: 20px 23px;
+  border: 1px solid var(--hw-border);
+  border-radius: 6px;
+  background: #0d151d;
+}
+.serviceHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+.serviceHeading h2 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.servicePanel > p {
+  margin-top: 9px;
+  color: var(--hw-muted);
+  font-size: 12px;
+}
+.retryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin-top: 9px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hw-accent);
+  font-size: 11px;
+}
+.retryButton:hover {
+  color: #c5ffee;
+}
+.retryButton:disabled {
+  color: var(--hw-dim);
+}
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 42px;
+  border-top: 1px solid var(--hw-border-soft);
+  color: var(--hw-dim);
+  font-size: 10px;
+}
+.footer > span:first-child {
+  font: 8px var(--hw-mono);
+  letter-spacing: 0.15em;
+}
+@media (max-width: 600px) {
+  .header {
+    min-height: 80px;
+    padding: 17px 20px;
+  }
+  .brand {
+    gap: 10px;
+  }
+  .brand svg {
+    width: 29px;
+    height: 33px;
+  }
+  .brand > span {
+    font-size: 10px;
+  }
+  .brand > span > span {
+    font-size: 7px;
+  }
+  .headerBadge {
+    padding: 7px;
+    font-size: 7px;
+    gap: 5px;
+  }
+  .main {
+    padding: 34px 19px 44px;
+  }
+  .lockPanel {
+    padding: 31px 23px 0;
+  }
+  .lockPanel h1 {
+    font-size: 30px;
+  }
+  .description {
+    font-size: 12px;
+  }
+  .boundary {
+    padding: 14px;
+    font-size: 11px;
+  }
+  .panelFooter {
+    margin: 0 -23px;
+    padding: 15px;
+    font-size: 9px;
+  }
+  .panelFooter > span:first-child {
+    font-size: 7px;
+  }
+  .servicePanel {
+    padding: 17px;
+  }
+  .serviceHeading {
+    align-items: flex-start;
+  }
+  .serviceHeading h2 {
+    font-size: 12px;
+    padding-top: 2px;
+  }
+  .footer {
+    flex-direction: column;
+    gap: 9px;
+    padding: 20px;
+  }
+}

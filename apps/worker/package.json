@@ -1,0 +1,10 @@
+{
+  "name": "@hunter-world/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hunter-world/server": "workspace:*",
+    "@hunter-world/database": "workspace:*"
+  }
+}

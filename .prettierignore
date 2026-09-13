@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+docs/plans/master-blueprint.md
+docs/product/source/**
+.cache
+dist
+node_modules
