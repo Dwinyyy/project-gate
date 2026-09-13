@@ -411,15 +411,15 @@ git commit -m "feat: require operator TOTP assurance"
 - Consumes: the completed Task 2.1 auth surfaces.
 - Produces: repeatable provider/config verification and an honest Task 2.1 evidence record.
 
-- [ ] **Step 1: Add safe configuration documentation**
+- [x] **Step 1: Add safe configuration documentation**
 
 Document `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` as public Auth configuration, exact player/operator callback URLs, 12-character passwords, required email confirmation, refresh rotation, and TOTP-only operator MFA. State that no service-role key belongs in either browser build.
 
-- [ ] **Step 2: Extend development verification without creating accounts**
+- [x] **Step 2: Extend development verification without creating accounts**
 
 Verify the Auth health/settings endpoint, the API public config response, rejection of a fabricated bearer token, and rejection of a fabricated operator token. Do not create unmanaged test users or send recovery email from the default verification script.
 
-- [ ] **Step 3: Run fresh local verification**
+- [x] **Step 3: Run fresh local verification**
 
 Run: `pnpm format`
 
@@ -437,11 +437,11 @@ Expected: formatting, types, lint, boundaries, secret scan, unit/API tests, buil
 
 Exercise registration → email verification → sign-in → refresh → recovery → password update → sign-out. Separately exercise operator sign-in → TOTP enrollment → `aal2` challenge → current database grant check → sign-out. Record only IDs/timestamps and redacted artifacts; never record passwords, tokens, QR payloads, or MFA secrets.
 
-- [ ] **Step 5: Update the ledger conservatively**
+- [x] **Step 5: Update the ledger conservatively**
 
 Mark 2.1 complete only if both automated verification and the managed-provider happy path pass. Otherwise record the implemented/tested surface and the exact unavailable external evidence while leaving 2.1 in progress. Keep 2.2–2.7 planned.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .env.example supabase/config.toml scripts/verify-development.ts docs/runbooks/development-services.md docs/testing/foundation-verification.md docs/tasks/ledger.md

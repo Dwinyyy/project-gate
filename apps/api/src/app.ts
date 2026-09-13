@@ -95,9 +95,7 @@ export function buildApp(options: ApiOptions = {}) {
     },
     async (request, reply) => {
       if (!options.auth) {
-        return reply
-          .code(503)
-          .send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
+        return reply.code(503).send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
       }
       return reply.code(200).send(options.auth.publicConfig);
     },
@@ -112,9 +110,7 @@ export function buildApp(options: ApiOptions = {}) {
     },
     async (request, reply) => {
       if (!options.auth) {
-        return reply
-          .code(503)
-          .send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
+        return reply.code(503).send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
       }
       const token = bearerToken(request.headers.authorization);
       if (!token) {

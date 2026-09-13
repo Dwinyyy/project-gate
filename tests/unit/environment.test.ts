@@ -38,12 +38,12 @@ describe('server environment', () => {
     );
   });
   it('requires the public Supabase URL and publishable key together', () => {
-    expect(() =>
-      parseEnvironment({ SUPABASE_URL: 'https://project.supabase.co' }),
-    ).toThrow('SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured together');
-    expect(() =>
-      parseEnvironment({ SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_example' }),
-    ).toThrow('SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured together');
+    expect(() => parseEnvironment({ SUPABASE_URL: 'https://project.supabase.co' })).toThrow(
+      'SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured together',
+    );
+    expect(() => parseEnvironment({ SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_example' })).toThrow(
+      'SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured together',
+    );
   });
   it('accepts a complete public Supabase Auth configuration', () => {
     expect(

@@ -1,21 +1,22 @@
-# Foundation verification — 2026-09-13
+# Foundation and Phase 2 verification — 2026-09-13
 
 ## Current checkpoint
 
-Completed phases: **0 and 1**. Next: **Phase 2, Task 2.1** authentication, then 2.2–2.3 character persistence/creation. Authentication remains planned, not implemented.
+Completed phases: **0 and 1**. Active: **Phase 2, Task 2.1** authentication. Task 2.1 is implemented and verified locally against controlled provider boundaries, but remains **in progress** until the managed email/recovery journey and a provisioned operator TOTP journey pass. Only then may work advance to 2.2–2.3 character persistence/creation.
 
 ## Verified evidence
 
 - Complete canonical brief, approved blueprint, 173-task ledger, 32 requirements, 28 acceptance cases, 12 invariants and ADRs persisted.
-- React player/operator shells, typed public API, Fastify API and worker builds pass. Operator access fails closed.
-- Latest `pnpm verify`: 33 unit/API tests, strict types, lint, boundary/credential guards and all builds passed. Formatting passed.
-- Real PostgreSQL integration: 10 tests passed, including restart/retry without duplicate effects, transaction rollback and restricted permissions. Browser suite: 3 passed.
+- React player/operator shells, typed public API, Fastify API and worker builds pass. Player registration, sign-in, verification callback, sign-out and recovery screens are connected through a React-neutral Supabase adapter. A provider session is not presented as server-verified until the API validates it.
+- Operator password access, TOTP enrollment/challenge, AAL2 validation and the independent active-operator database grant are implemented. Enrollment QR/secret material is cleared outside the enrollment step. Administrative mutation routes remain closed.
+- Latest `pnpm verify`: 65 unit/API tests, strict types, lint, boundary/credential guards and all builds passed. Formatting passed. Vite reported a non-failing player chunk-size optimization advisory.
+- Real PostgreSQL integration: 11 tests passed, including private operator tables, suspended-operator denial, runtime read-only grants, restart/retry without duplicate effects, transaction rollback and restricted permissions. Browser suite: 11 passed across foundation honesty, player accounts and operator MFA.
 - **GitHub run 34749247587 passed every check** on commit `f1b26e2`: clean frozen installation, verify, format, PostgreSQL integration and browser tests. Initial Linux wildcard failure was corrected.
-- Supabase `project-gate` (`zsejplglpfcmcikcydgb`) is healthy in Paris. Four canonical migrations applied with checksum receipts. Security advisor reported zero findings after queue function search-path fix.
-- Managed restricted `hunter_runtime` connection verified over TLS. API readiness and worker startup passed through `scripts/verify-development.ts`. Owner password removed from ignored `.env` after bootstrap; no credentials committed or printed.
-- Auth provider health/settings returned HTTP 200; this does not establish implemented authentication flows.
+- Supabase `project-gate` (`zsejplglpfcmcikcydgb`) is healthy in Paris. Five canonical migrations are applied with checksum receipts. The operator migration created no operator identities; runtime has read-only access while `anon` and `authenticated` have none. The current security advisor reports zero findings; performance notices are pre-existing pg-boss informational items.
+- Managed restricted `hunter_runtime` connection verified over TLS. API readiness, worker startup, public Auth config projection, provider health/policy, and rejection of fabricated player/operator tokens passed through `scripts/verify-development.ts`. Owner password remains absent from ignored `.env`; the canonical runner refused to use runtime credentials, and the tested migration was applied through the audited Supabase transport. No credentials were committed or printed.
+- Managed public Auth settings confirm signup enabled, email enabled with confirmation required, and phone sign-in disabled. This is a non-mutating configuration check, not evidence of a completed live email, recovery or TOTP journey.
 - GitHub private `Dwinyyy/project-gate` read/write access confirmed and checkpoint pushed on `codex/foundation`. Unrelated finance project untouched.
-- Local preview at http://127.0.0.1:5173 responded 200; API readiness returned ready. Chromium loaded System · Hunter World with no page errors. Restart using `pnpm dev` when needed.
+- Local player preview at http://127.0.0.1:5173 and operator preview at http://127.0.0.1:5174 responded 200 during verification. Chromium found meaningful responsive content, labeled controls, no Vite overlay and no console errors. Restart using `pnpm dev:api`, `pnpm dev:player` and `pnpm dev:operator` when needed.
 
 ## Environment decision
 
@@ -25,4 +26,4 @@ CA: official Supabase dashboard source URL documented in development-services.md
 
 ## Limitations
 
-Preview is a foundation shell, not a playable game. No player authentication, characters, gameplay, economy, location, mobile package or production deployment is implemented. A01–A28 gameplay cases remain not-run. Focused security checks are not a full audit. PostGIS belongs with geographic queries. Preserve server authority and hidden-content boundaries as Phase 2 begins.
+Preview is an account-enabled foundation shell, not a playable game. No dedicated test inbox or provisioned operator identity was available, so managed registration → email verification → refresh → recovery → password update → sign-out and operator sign-in → TOTP enrollment → AAL2 grant check → sign-out remain not-run. Task 2.1 therefore remains in progress. Characters, gameplay, economy, location, mobile packaging and production deployment are not implemented. A01–A28 gameplay cases remain not-run. Focused security checks are not a full audit. PostGIS belongs with geographic queries.
