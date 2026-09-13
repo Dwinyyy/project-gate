@@ -167,4 +167,111 @@ describe('foundation API trust boundaries', () => {
       expect(response.json()).toMatchObject({ error: { code: 'AUTH_REQUIRED' } });
     },
   );
+
+  it('requires MFA after confirming current operator access', async () => {
+    const authUserId = '11111111-1111-4111-8111-111111111111';
+    const app = buildApp({
+      logger: false,
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async () => ({
+            authUserId,
+            email: 'operator@example.test',
+            emailVerified: true,
+            sessionId: '22222222-2222-4222-8222-222222222222',
+            aal: 'aal1',
+          }),
+        },
+      },
+      operators: {
+        findActiveOperator: async () => ({
+          authUserId,
+          permissions: ['feature_controls:read'],
+        }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      url: '/v1/operator/session',
+      headers: { authorization: 'Bearer valid-aal1-token' },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ error: { code: 'MFA_REQUIRED' } });
+  });
+
+  it('does not let an aal2 player session confer operator access', async () => {
+    const app = buildApp({
+      logger: false,
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async () => ({
+            authUserId: '11111111-1111-4111-8111-111111111111',
+            email: 'player@example.test',
+            emailVerified: true,
+            sessionId: '22222222-2222-4222-8222-222222222222',
+            aal: 'aal2',
+          }),
+        },
+      },
+      operators: { findActiveOperator: async () => null },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      url: '/v1/operator/session',
+      headers: { authorization: 'Bearer valid-player-aal2-token' },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ error: { code: 'OPERATOR_ACCESS_DENIED' } });
+  });
+
+  it('returns only scoped permissions for a current aal2 operator', async () => {
+    const authUserId = '11111111-1111-4111-8111-111111111111';
+    const app = buildApp({
+      logger: false,
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async () => ({
+            authUserId,
+            email: 'operator@example.test',
+            emailVerified: true,
+            sessionId: '22222222-2222-4222-8222-222222222222',
+            aal: 'aal2',
+          }),
+        },
+      },
+      operators: {
+        findActiveOperator: async () => ({
+          authUserId,
+          permissions: ['feature_controls:read'],
+        }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      url: '/v1/operator/session',
+      headers: { authorization: 'Bearer valid-operator-aal2-token' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      authUserId,
+      aal: 'aal2',
+      permissions: ['feature_controls:read'],
+    });
+    expect(response.body).not.toMatch(/email|sessionId|user_metadata|provider/i);
+  });
 });

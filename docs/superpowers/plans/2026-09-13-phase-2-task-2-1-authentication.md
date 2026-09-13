@@ -146,7 +146,7 @@ git commit -m "feat: validate Supabase account sessions"
 - Produces: `OperatorAccessStore.findActiveOperator(authUserId)` and authenticated `GET /v1/operator/session`.
 - Produces: an `ops.operator_accounts` record keyed by Supabase Auth user UUID with explicit status and permission array.
 
-- [ ] **Step 1: Write the failing migration/integration assertions**
+- [x] **Step 1: Write the failing migration/integration assertions**
 
 ```ts
 expect(
@@ -162,17 +162,17 @@ await expect(findActiveOperator(database.pool, operatorId)).resolves.toEqual({
 });
 ```
 
-- [ ] **Step 2: Run the integration test and confirm the table is missing**
+- [x] **Step 2: Run the integration test and confirm the table is missing**
 
-Run: `pnpm test:integration`
+Run: `pnpm exec tsx scripts/test-postgres.ts`
 
 Expected: failure because `ops.operator_accounts` does not exist.
 
-- [ ] **Step 3: Add the canonical SQL migration**
+- [x] **Step 3: Add the canonical SQL migration**
 
 Create an `active|suspended` status constraint, nonempty unique permissions, timestamps, and an update trigger only if the existing migration conventions require one. Revoke schema/table access from `PUBLIC`, `anon`, and `authenticated`; grant only `SELECT` on the table to `hunter_runtime`. Do not seed a real operator identity.
 
-- [ ] **Step 4: Implement the focused database lookup**
+- [x] **Step 4: Implement the focused database lookup**
 
 ```ts
 export interface OperatorAccess {
@@ -186,23 +186,23 @@ export async function findActiveOperator(
 ): Promise<OperatorAccess | null>;
 ```
 
-- [ ] **Step 5: Add failing API tests for the two independent operator gates**
+- [x] **Step 5: Add failing API tests for the two independent operator gates**
 
 Assert that an active operator at `aal1` receives `MFA_REQUIRED`, a non-operator at `aal2` receives `OPERATOR_ACCESS_DENIED`, and an active operator at `aal2` receives only their ID, assurance level, and permission list.
 
-- [ ] **Step 6: Implement `GET /v1/operator/session`**
+- [x] **Step 6: Implement `GET /v1/operator/session`**
 
 Validate identity first, query current operator status second, enforce `aal2` third, and return no provider metadata or unrelated account fields. Keep the wildcard operator route closed.
 
-- [ ] **Step 7: Verify database and API operator boundaries**
+- [x] **Step 7: Verify database and API operator boundaries**
 
 Run: `pnpm exec vitest run tests/unit/api.test.ts`
 
-Run: `pnpm test:integration`
+Run: `pnpm exec tsx scripts/test-postgres.ts`
 
 Expected: focused unit and real PostgreSQL permission tests pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add supabase/migrations/20260913223000_operator_accounts.sql packages/database/src/operator-access.ts packages/database/src/index.ts apps/api/src/app.ts apps/api/src/index.ts tests/integration/foundation.test.ts tests/unit/api.test.ts
@@ -422,7 +422,7 @@ Run: `pnpm format`
 
 Run: `pnpm verify`
 
-Run: `pnpm test:integration`
+Run: `pnpm exec tsx scripts/test-postgres.ts`
 
 Run: `pnpm test:e2e`
 

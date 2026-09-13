@@ -1,6 +1,13 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 
+export {
+  createOperatorAccessStore,
+  findActiveOperator,
+  type OperatorAccess,
+  type OperatorAccessStore,
+} from './operator-access.js';
+
 export interface DatabaseOptions {
   connectionString: string;
   ssl?: PoolConfig['ssl'];

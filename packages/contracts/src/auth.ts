@@ -26,3 +26,20 @@ export const selfSessionSchema = {
 } as const;
 
 export type SelfSession = FromSchema<typeof selfSessionSchema>;
+
+export const operatorSessionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['authUserId', 'aal', 'permissions'],
+  properties: {
+    authUserId: { type: 'string', format: 'uuid' },
+    aal: { const: 'aal2' },
+    permissions: {
+      type: 'array',
+      uniqueItems: true,
+      items: { type: 'string', minLength: 3, maxLength: 80 },
+    },
+  },
+} as const;
+
+export type OperatorSession = FromSchema<typeof operatorSessionSchema>;

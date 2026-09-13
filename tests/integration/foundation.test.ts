@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
   createDatabase,
+  findActiveOperator,
   getFeatureControls,
   withTransaction,
 } from '../../packages/database/src/index.js';
@@ -292,5 +293,43 @@ test('features are persisted disabled and public API roles cannot see private ta
       [role],
     );
     expect(access.rows).toEqual([{ schema: false, table: false }]);
+  }
+});
+
+test('operator access is private, current, and read-only to the runtime', async () => {
+  const authUserId = randomUUID();
+  await owner.query(
+    "INSERT INTO ops.operator_accounts(auth_user_id, status) VALUES ($1, 'active')",
+    [authUserId],
+  );
+  await owner.query(
+    "INSERT INTO ops.operator_permissions(auth_user_id, permission) VALUES ($1, 'feature_controls:read')",
+    [authUserId],
+  );
+  try {
+    await expect(findActiveOperator(database.pool, authUserId)).resolves.toEqual({
+      authUserId,
+      permissions: ['feature_controls:read'],
+    });
+    await owner.query(
+      "UPDATE ops.operator_accounts SET status = 'suspended', updated_at = now() WHERE auth_user_id = $1",
+      [authUserId],
+    );
+    await expect(findActiveOperator(database.pool, authUserId)).resolves.toBeNull();
+    await expect(
+      database.pool.query(
+        "INSERT INTO ops.operator_accounts(auth_user_id, status) VALUES ($1, 'active')",
+        [randomUUID()],
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
+    for (const role of ['anon', 'authenticated']) {
+      const access = await owner.query<{ accounts: boolean; permissions: boolean }>(
+        "SELECT has_table_privilege($1, 'ops.operator_accounts', 'SELECT') AS accounts, has_table_privilege($1, 'ops.operator_permissions', 'SELECT') AS permissions",
+        [role],
+      );
+      expect(access.rows).toEqual([{ accounts: false, permissions: false }]);
+    }
+  } finally {
+    await owner.query('DELETE FROM ops.operator_accounts WHERE auth_user_id = $1', [authUserId]);
   }
 });

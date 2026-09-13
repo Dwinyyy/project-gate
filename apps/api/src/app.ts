@@ -5,19 +5,23 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import {
   authConfigSchema,
+  operatorSessionSchema,
   systemStatusSchema,
   errorResponseSchema,
   selfSessionSchema,
   type AuthConfig,
+  type OperatorSession,
   type SelfSession,
   type SystemStatus,
 } from '@hunter-world/contracts';
 import type { AuthVerifier } from '@hunter-world/server';
+import type { OperatorAccessStore } from '@hunter-world/database';
 
 export interface ApiOptions {
   logger?: boolean;
   database?: { ready(): Promise<boolean> };
   auth?: { publicConfig: AuthConfig; verifier: AuthVerifier };
+  operators?: OperatorAccessStore;
 }
 
 function bearerToken(authorization: string | undefined): string | null {
@@ -123,7 +127,55 @@ export function buildApp(options: ApiOptions = {}) {
       return reply.code(200).send(identity);
     },
   );
-  // No operator identity provider exists until Task 2.1. Deny every method and path.
+  app.get(
+    '/v1/operator/session',
+    {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      schema: {
+        response: {
+          200: operatorSessionSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          503: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!options.auth || !options.operators) {
+        return reply
+          .code(503)
+          .send({ error: { code: 'OPERATOR_AUTH_UNAVAILABLE', requestId: request.id } });
+      }
+      const token = bearerToken(request.headers.authorization);
+      if (!token) {
+        return reply
+          .code(401)
+          .send({ error: { code: 'OPERATOR_AUTH_REQUIRED', requestId: request.id } });
+      }
+      const identity = await options.auth.verifier.verify(token);
+      if (!identity) {
+        return reply
+          .code(401)
+          .send({ error: { code: 'OPERATOR_AUTH_REQUIRED', requestId: request.id } });
+      }
+      const operator = await options.operators.findActiveOperator(identity.authUserId);
+      if (!operator) {
+        return reply
+          .code(403)
+          .send({ error: { code: 'OPERATOR_ACCESS_DENIED', requestId: request.id } });
+      }
+      if (identity.aal !== 'aal2') {
+        return reply.code(403).send({ error: { code: 'MFA_REQUIRED', requestId: request.id } });
+      }
+      const session: OperatorSession = {
+        authUserId: identity.authUserId,
+        aal: 'aal2',
+        permissions: operator.permissions,
+      };
+      return reply.code(200).send(session);
+    },
+  );
+  // Administrative tools remain closed until their permissioned routes are implemented.
   app.all(
     '/v1/operator/*',
     { schema: { hide: true, response: { 401: errorResponseSchema } } },

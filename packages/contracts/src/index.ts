@@ -2,8 +2,10 @@ import type { FromSchema } from 'json-schema-to-ts';
 
 export {
   authConfigSchema,
+  operatorSessionSchema,
   selfSessionSchema,
   type AuthConfig,
+  type OperatorSession,
   type SelfSession,
 } from './auth.js';
 
