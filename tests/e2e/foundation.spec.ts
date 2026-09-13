@@ -1,14 +1,87 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function useControlledAuth(page: Page) {
+const operatorUserId = '22222222-2222-4222-8222-222222222222';
+const operatorSessionId = '33333333-3333-4333-8333-333333333333';
+const operatorFactorId = '44444444-4444-4444-8444-444444444444';
+
+interface TestFactor {
+  id: string;
+  status: 'verified' | 'unverified';
+  factor_type: 'totp';
+  friendly_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function accessToken(aal: 'aal1' | 'aal2'): string {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
+    sub: operatorUserId,
+    exp: 2_000_000_000,
+    aal,
+    session_id: operatorSessionId,
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'operator@example.test',
+    amr: [{ method: 'password', timestamp: 1_789_318_800 }],
+  })}.fixture`;
+}
+
+function operatorUser(factors: TestFactor[]) {
+  return {
+    id: operatorUserId,
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'operator@example.test',
+    email_confirmed_at: '2026-09-13T12:00:00.000Z',
+    phone: '',
+    app_metadata: { provider: 'email', providers: ['email'] },
+    user_metadata: {},
+    identities: [],
+    factors,
+    created_at: '2026-09-13T12:00:00.000Z',
+    updated_at: '2026-09-13T12:00:00.000Z',
+  };
+}
+
+function passwordSession(aal: 'aal1' | 'aal2', factors: TestFactor[]) {
+  return {
+    access_token: accessToken(aal),
+    token_type: 'bearer',
+    expires_in: 3600,
+    expires_at: 2_000_000_000,
+    refresh_token: `fixture-refresh-${aal}`,
+    user: operatorUser(factors),
+  };
+}
+
+async function useControlledAuth(page: Page, port = 5173) {
   await page.route('**/v1/auth/config', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        supabaseUrl: 'http://127.0.0.1:5173',
+        supabaseUrl: `http://127.0.0.1:${port}`,
         supabasePublishableKey: 'sb_publishable_browser_fixture',
       }),
+    }),
+  );
+}
+
+async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
+  await useControlledAuth(page, 5174);
+  await page.route('**/auth/v1/token**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(passwordSession('aal1', factors)),
+    }),
+  );
+  await page.route('**/auth/v1/user', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(operatorUser(factors)),
     }),
   );
 }
@@ -131,4 +204,155 @@ test('player verification callback fails safely without a confirmed session', as
   await page.goto('/auth/callback');
   await expect(page.getByText('This account link could not be confirmed.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Return to sign in' })).toBeVisible();
+});
+
+test('operator MFA starts behind password authentication without registration', async ({
+  page,
+}) => {
+  await useControlledAuth(page, 5174);
+  await page.goto('http://127.0.0.1:5174');
+  await expect(page.getByRole('heading', { name: 'Operator sign in.' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /create/i })).toHaveCount(0);
+  await page.getByLabel('Operator email').fill('operator@example.test');
+  await page.getByLabel('Password').fill('short');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByText('Use at least 12 characters for your password.')).toBeVisible();
+  await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
+});
+
+test('operator MFA enrollment keeps its QR secret inside the enrollment step', async ({ page }) => {
+  await useOperatorPasswordSession(page, []);
+  await page.route('**/auth/v1/factors', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: operatorFactorId,
+        type: 'totp',
+        friendly_name: 'Hunter World Operator',
+        status: 'unverified',
+        created_at: '2026-09-13T12:00:00.000Z',
+        updated_at: '2026-09-13T12:00:00.000Z',
+        totp: {
+          qr_code:
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="white"/><path d="M2 2h5v5H2zm7 0h5v5H9zM2 9h5v5H2z" fill="black"/></svg>',
+          secret: 'JBSWY3DPEHPK3PXP',
+          uri: 'otpauth://totp/Hunter%20World:operator%40example.test?secret=JBSWY3DPEHPK3PXP',
+        },
+      }),
+    }),
+  );
+  await page.goto('http://127.0.0.1:5174');
+  await page.getByLabel('Operator email').fill('operator@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
+  await expect(page.getByText('JBSWY3DPEHPK3PXP')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Set up authenticator' }).click();
+  await expect(page.getByRole('img', { name: 'Authenticator enrollment QR code' })).toBeVisible();
+  await expect(page.getByText('JBSWY3DPEHPK3PXP')).toBeVisible();
+  await page.getByLabel('Six-digit code').fill('123');
+  await page.getByRole('button', { name: 'Verify authenticator' }).click();
+  await expect(page.getByText('Enter the six-digit authenticator code.')).toBeVisible();
+  await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
+});
+
+test('operator MFA keeps an unprovisioned AAL2 identity denied', async ({ page }) => {
+  const factors: TestFactor[] = [
+    {
+      id: operatorFactorId,
+      status: 'verified',
+      factor_type: 'totp',
+      friendly_name: 'Hunter World Operator',
+      created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    },
+  ];
+  await useOperatorPasswordSession(page, factors);
+  await page.route(`**/auth/v1/factors/${operatorFactorId}/challenge`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'challenge-fixture', type: 'totp', expires_at: 2_000_000_000 }),
+    }),
+  );
+  await page.route(`**/auth/v1/factors/${operatorFactorId}/verify`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(passwordSession('aal2', factors)),
+    }),
+  );
+  await page.route('**/v1/operator/session', (route) =>
+    route.fulfill({
+      status: 403,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({ error: { code: 'OPERATOR_ACCESS_DENIED' } }),
+    }),
+  );
+  await page.goto('http://127.0.0.1:5174');
+  await page.getByLabel('Operator email').fill('operator@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Enter your authenticator code.' })).toBeVisible();
+  await expect(page.getByRole('img', { name: /QR/i })).toHaveCount(0);
+  await expect(page.getByText('JBSWY3DPEHPK3PXP')).toHaveCount(0);
+  await page.getByLabel('Six-digit code').fill('123456');
+  await page.getByRole('button', { name: 'Verify authenticator' }).click();
+  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
+});
+
+test('operator MFA admits only an active AAL2 operator to the restricted shell', async ({
+  page,
+}) => {
+  const factors: TestFactor[] = [
+    {
+      id: operatorFactorId,
+      status: 'verified',
+      factor_type: 'totp',
+      friendly_name: 'Hunter World Operator',
+      created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    },
+  ];
+  await useOperatorPasswordSession(page, factors);
+  await page.route(`**/auth/v1/factors/${operatorFactorId}/challenge`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'challenge-fixture', type: 'totp', expires_at: 2_000_000_000 }),
+    }),
+  );
+  await page.route(`**/auth/v1/factors/${operatorFactorId}/verify`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(passwordSession('aal2', factors)),
+    }),
+  );
+  await page.route('**/v1/operator/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: operatorUserId,
+        aal: 'aal2',
+        permissions: ['system:read'],
+      }),
+    }),
+  );
+  await page.goto('http://127.0.0.1:5174');
+  await page.getByLabel('Operator email').fill('operator@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.getByLabel('Six-digit code').fill('123456');
+  await page.getByRole('button', { name: 'Verify authenticator' }).click();
+  await expect(page.getByRole('heading', { name: 'Operator session authorized.' })).toBeVisible();
+  await expect(page.getByText('system:read', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Administrative tools remain unavailable in this task.'),
+  ).toBeVisible();
+  await expect(page.getByRole('img', { name: /QR/i })).toHaveCount(0);
+  await expect(page.getByText('JBSWY3DPEHPK3PXP')).toHaveCount(0);
 });

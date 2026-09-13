@@ -202,7 +202,10 @@ describe('browser Auth controller', () => {
     const controller = createAuthControllerForBackend(backend);
     await controller.ready();
 
-    await expect(controller.getMfaStatus()).resolves.toBe('unenrolled');
+    await expect(controller.getMfaStatus()).resolves.toEqual({
+      assurance: 'unenrolled',
+      verifiedTotpFactorIds: [],
+    });
     const enrollment = await controller.enrollTotp();
     expect(enrollment).toEqual({
       factorId: 'factor-1',
@@ -212,9 +215,15 @@ describe('browser Auth controller', () => {
     });
 
     backend.verifiedFactorIds = ['factor-1'];
-    await expect(controller.getMfaStatus()).resolves.toBe('aal1');
+    await expect(controller.getMfaStatus()).resolves.toEqual({
+      assurance: 'aal1',
+      verifiedTotpFactorIds: ['factor-1'],
+    });
     await controller.verifyTotp('factor-1', '123456');
-    await expect(controller.getMfaStatus()).resolves.toBe('aal2');
+    await expect(controller.getMfaStatus()).resolves.toEqual({
+      assurance: 'aal2',
+      verifiedTotpFactorIds: ['factor-1'],
+    });
     expect(controller.getSnapshot().accessToken).toBe('aal2-token');
   });
 
@@ -246,7 +255,8 @@ describe('Auth HTTP boundaries', () => {
     });
 
     await expect(
-      getAuthConfig((async () => Response.json({ supabaseUrl: 'javascript:alert(1)' })) as typeof fetch),
+      getAuthConfig((async () =>
+        Response.json({ supabaseUrl: 'javascript:alert(1)' })) as typeof fetch),
     ).rejects.toMatchObject({ code: 'unavailable' });
   });
 

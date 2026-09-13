@@ -104,6 +104,172 @@
   font-size: 13px;
   line-height: 1.85;
 }
+.authForm {
+  max-width: 390px;
+  margin: 24px auto 0;
+  display: grid;
+  text-align: left;
+}
+.authForm label {
+  margin: 16px 0 8px;
+  color: var(--hw-muted);
+  font: 9px var(--hw-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.authForm input {
+  width: 100%;
+  min-height: 47px;
+  padding: 11px 13px;
+  border: 1px solid #30423f;
+  border-radius: 5px;
+  outline: none;
+  background: #090f15;
+  color: var(--hw-text);
+  font: 14px var(--hw-font);
+}
+.authForm input:hover {
+  border-color: #486158;
+}
+.authForm input:focus-visible {
+  border-color: var(--hw-accent);
+  box-shadow: 0 0 0 3px #81e9cc1f;
+}
+.formMessage {
+  min-height: 39px;
+  padding-top: 12px;
+  color: #efaaaa;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.formError {
+  margin: 0;
+}
+.primaryButton,
+.secondaryButton {
+  border-radius: 5px;
+  font: 600 12px var(--hw-font);
+  cursor: pointer;
+}
+.primaryButton {
+  width: min(100%, 390px);
+  min-height: 47px;
+  margin: 25px auto 0;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #4b796b;
+  background: #183a31;
+  color: #d2ffef;
+}
+.authForm .primaryButton {
+  width: 100%;
+  margin-top: 0;
+}
+.primaryButton:hover:not(:disabled) {
+  border-color: var(--hw-accent);
+  background: #204739;
+}
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.secondaryButton {
+  min-height: 39px;
+  padding: 8px 13px;
+  border: 1px solid var(--hw-border);
+  background: transparent;
+  color: var(--hw-muted);
+}
+.secondaryButton:hover:not(:disabled) {
+  border-color: #4b796b;
+  color: var(--hw-accent);
+}
+.sessionAction {
+  margin: 22px 0 27px;
+  display: flex;
+  justify-content: center;
+}
+.enrollment {
+  margin-bottom: 4px;
+  padding: 17px;
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  border: 1px solid #304139;
+  border-radius: 6px;
+  background: #091117;
+}
+.enrollment img {
+  width: 118px;
+  height: 118px;
+  padding: 7px;
+  border-radius: 4px;
+  background: white;
+}
+.enrollment span,
+.permissions > span {
+  display: block;
+  color: var(--hw-dim);
+  font: 8px var(--hw-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.enrollment code {
+  display: block;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+  color: var(--hw-text);
+  font: 12px/1.6 var(--hw-mono);
+}
+.operatorSession {
+  max-width: 390px;
+  margin: 25px auto 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  text-align: left;
+}
+.operatorSession div {
+  min-width: 0;
+}
+.operatorSession dt {
+  color: var(--hw-dim);
+  font: 8px var(--hw-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.operatorSession dd {
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--hw-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.permissions {
+  max-width: 390px;
+  margin: 25px auto 0;
+  text-align: left;
+}
+.permissions ul {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+.permissions li {
+  padding: 7px 9px;
+  border: 1px solid #315448;
+  border-radius: 4px;
+  background: #122a27;
+  color: var(--hw-accent);
+  font: 10px var(--hw-mono);
+}
 .boundary {
   display: flex;
   align-items: flex-start;
@@ -223,6 +389,15 @@
   }
   .description {
     font-size: 12px;
+  }
+  .enrollment {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+  .operatorSession {
+    grid-template-columns: 1fr;
+    gap: 14px;
   }
   .boundary {
     padding: 14px;

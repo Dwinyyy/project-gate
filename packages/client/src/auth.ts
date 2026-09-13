@@ -60,6 +60,11 @@ export interface TotpEnrollment {
   uri: string;
 }
 
+export interface MfaStatus {
+  assurance: 'unenrolled' | 'aal1' | 'aal2';
+  verifiedTotpFactorIds: string[];
+}
+
 export interface AuthBackend {
   getSession(): Promise<AuthBackendResult<AuthBackendSession | null>>;
   subscribe(
@@ -110,7 +115,7 @@ export interface AuthController {
   signOut(): Promise<void>;
   requestPasswordRecovery(email: string, redirectTo: string): Promise<void>;
   updatePassword(password: string): Promise<void>;
-  getMfaStatus(): Promise<'unenrolled' | 'aal1' | 'aal2'>;
+  getMfaStatus(): Promise<MfaStatus>;
   enrollTotp(): Promise<TotpEnrollment>;
   verifyTotp(factorId: string, code: string): Promise<void>;
   dispose(): void;
@@ -118,10 +123,7 @@ export interface AuthController {
 
 function normalizeEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
-  if (
-    normalized.length > 254 ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)
-  ) {
+  if (normalized.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
     throw new AuthActionError('invalid_input', 'Enter a valid email address.');
   }
   return normalized;
@@ -198,7 +200,9 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
   };
   const unsubscribeBackend = backend.subscribe((event, nextSession) => {
     revision += 1;
-    publish(snapshotForSession(nextSession, event === 'PASSWORD_RECOVERY' ? 'recovery' : 'authenticated'));
+    publish(
+      snapshotForSession(nextSession, event === 'PASSWORD_RECOVERY' ? 'recovery' : 'authenticated'),
+    );
   });
   const initializationRevision = revision;
   const readyPromise = backend
@@ -272,8 +276,15 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
     },
     async getMfaStatus() {
       const state = requireData(await backend.getMfaState());
-      if (state.currentLevel === 'aal2') return 'aal2';
-      return state.verifiedTotpFactorIds.length > 0 ? 'aal1' : 'unenrolled';
+      return {
+        assurance:
+          state.currentLevel === 'aal2'
+            ? 'aal2'
+            : state.verifiedTotpFactorIds.length > 0
+              ? 'aal1'
+              : 'unenrolled',
+        verifiedTotpFactorIds: [...state.verifiedTotpFactorIds],
+      };
     },
     async enrollTotp() {
       const enrollment = requireData(await backend.enrollTotp());
@@ -423,9 +434,7 @@ function parseAuthConfig(value: unknown): AuthConfig | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   if (
-    Object.keys(record).some(
-      (key) => key !== 'supabaseUrl' && key !== 'supabasePublishableKey',
-    ) ||
+    Object.keys(record).some((key) => key !== 'supabaseUrl' && key !== 'supabasePublishableKey') ||
     typeof record.supabaseUrl !== 'string' ||
     typeof record.supabasePublishableKey !== 'string' ||
     record.supabasePublishableKey.length < 1 ||
@@ -449,7 +458,9 @@ function parseAuthConfig(value: unknown): AuthConfig | null {
   }
 }
 
-export async function getAuthConfig(fetchAuth: typeof fetch = globalThis.fetch): Promise<AuthConfig> {
+export async function getAuthConfig(
+  fetchAuth: typeof fetch = globalThis.fetch,
+): Promise<AuthConfig> {
   try {
     const response = await fetchAuth('/v1/auth/config', {
       headers: { Accept: 'application/json' },
@@ -480,8 +491,7 @@ export async function createBrowserAuthController(
   return createAuthControllerForBackend(createSupabaseBackend(client));
 }
 
-const uuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 async function sessionRequest(
   path: string,

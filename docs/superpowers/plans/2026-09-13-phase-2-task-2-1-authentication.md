@@ -259,7 +259,10 @@ export interface AuthController {
   signOut(): Promise<void>;
   requestPasswordRecovery(email: string, redirectTo: string): Promise<void>;
   updatePassword(password: string): Promise<void>;
-  getMfaStatus(): Promise<'unenrolled' | 'aal1' | 'aal2'>;
+  getMfaStatus(): Promise<{
+    assurance: 'unenrolled' | 'aal1' | 'aal2';
+    verifiedTotpFactorIds: string[];
+  }>;
   enrollTotp(): Promise<TotpEnrollment>;
   verifyTotp(factorId: string, code: string): Promise<void>;
   dispose(): void;
@@ -357,25 +360,25 @@ git commit -m "feat: add player account access flows"
 - Consumes: `AuthController.getMfaStatus`, `enrollTotp`, `verifyTotp`, and authenticated `GET /v1/operator/session`.
 - Produces: operator states `anonymous`, `mfa-enrollment`, `mfa-challenge`, `authorization-check`, `authorized`, and `denied`.
 
-- [ ] **Step 1: Write failing browser acceptance for operator MFA gates**
+- [x] **Step 1: Write failing browser acceptance for operator MFA gates**
 
 Verify password sign-in never opens the workspace at `aal1`; unprovisioned users remain denied even at `aal2`; enrollment exposes the QR only on the enrollment screen; six-digit challenge validation is enforced; and an active `aal2` operator receives the restricted shell without exposing MFA secrets afterward.
 
-- [ ] **Step 2: Run the focused operator browser tests and confirm MFA UI is absent**
+- [x] **Step 2: Run the focused operator browser tests and confirm MFA UI is absent**
 
 Run: `pnpm exec playwright test --grep "operator MFA"`
 
 Expected: failure because operator sign-in and MFA states do not exist.
 
-- [ ] **Step 3: Implement the operator auth state machine**
+- [x] **Step 3: Implement the operator auth state machine**
 
 Do not offer registration in the operator app. Query current factor status after password sign-in, enroll TOTP only on explicit action, verify the challenge, then ask the API for current operator authorization. Clear factor secret and one-time code on navigation, error, success, and sign-out.
 
-- [ ] **Step 4: Preserve least privilege and honest unavailable tools**
+- [x] **Step 4: Preserve least privilege and honest unavailable tools**
 
 An authorized session may show the operator workspace boundary and granted permission names, but Task 2.1 opens no feature-control mutation route. Every other `/v1/operator/*` route remains denied or unavailable.
 
-- [ ] **Step 5: Verify operator UI and API together**
+- [x] **Step 5: Verify operator UI and API together**
 
 Run: `pnpm exec vitest run tests/unit/api.test.ts`
 
@@ -383,7 +386,7 @@ Run: `pnpm exec playwright test --grep "operator"`
 
 Expected: both independent operator gates and UI states pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/operator/src/auth apps/operator/src/App.tsx apps/operator/src/App.module.css tests/e2e/foundation.spec.ts

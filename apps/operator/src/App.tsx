@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getSystemStatus } from '@hunter-world/client';
 import { Icon, StatusBadge, SystemMark } from '@hunter-world/ui';
 import styles from './App.module.css';
+import { OperatorAuth } from './auth/OperatorAuth';
 
 export function App() {
   const service = useQuery({
@@ -31,29 +32,7 @@ export function App() {
       </header>
       <main id="main-content" className={styles.main} tabIndex={-1}>
         <p className={styles.eyebrow}>SYSTEM ADMINISTRATION</p>
-        <section className={styles.lockPanel} aria-labelledby="access-title">
-          <div className={styles.lockIllustration} aria-hidden="true">
-            <div />
-            <Icon name="shield" width="40" height="40" />
-          </div>
-          <StatusBadge tone="warning">Operator access locked</StatusBadge>
-          <h1 id="access-title">A protected workspace.</h1>
-          <p className={styles.description}>
-            Operator authentication is not connected in this release. Administrative tools remain
-            unavailable.
-          </p>
-          <div className={styles.boundary}>
-            <Icon name="lock" width="18" height="18" />
-            <p>
-              No operator session is active. Player records, controls, and administrative actions
-              are not accessible here.
-            </p>
-          </div>
-          <div className={styles.panelFooter}>
-            <span>FOUNDATION RELEASE</span>
-            <span>Authentication required</span>
-          </div>
-        </section>
+        <OperatorAuth />
         <section className={styles.servicePanel} aria-labelledby="service-title">
           <div className={styles.serviceHeading}>
             <h2 id="service-title">Public service connection</h2>
@@ -97,7 +76,7 @@ export function App() {
       </main>
       <footer className={styles.footer}>
         <span>HUNTER WORLD</span>
-        <span>Operator foundation · Access remains closed</span>
+        <span>Operator access · Password + authenticator + active record</span>
       </footer>
     </div>
   );

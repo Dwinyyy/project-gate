@@ -11,6 +11,7 @@ export {
   type AuthBackendEvent,
   type AuthBackendSession,
   type AuthController,
+  type MfaStatus,
   type AuthProblem,
   type AuthSnapshot,
   type TotpEnrollment,
