@@ -4,6 +4,10 @@ import { useQuery } from '@tanstack/react-query';
 import { getSystemStatus } from '@hunter-world/client';
 import { Icon, StatusBadge, SystemMark, type IconName } from '@hunter-world/ui';
 import styles from './App.module.css';
+import { AccountAccess } from './auth/AccountAccess';
+import { AccountControl } from './auth/AccountControl';
+import { AuthCallback } from './auth/AuthCallback';
+import { Recovery } from './auth/Recovery';
 
 const navigation: { path: string; label: string; icon: IconName }[] = [
   { path: '/', label: 'System', icon: 'system' },
@@ -12,6 +16,13 @@ const navigation: { path: string; label: string; icon: IconName }[] = [
   { path: '/community', label: 'Community', icon: 'community' },
   { path: '/inventory', label: 'Inventory', icon: 'inventory' },
 ];
+
+const accountTitles: Record<string, string> = {
+  '/account/sign-in': 'Sign in',
+  '/account/register': 'Registration',
+  '/account/recovery': 'Recovery',
+  '/auth/callback': 'Verification',
+};
 
 const plannedScreens = {
   map: {
@@ -111,7 +122,7 @@ function ConnectionPanel() {
               : status.isFetching
                 ? 'Contacting the System service…'
                 : connected
-                  ? 'The foundation service is available. Account access and gameplay are not enabled yet.'
+                  ? 'The System service is available. Account access can be verified; gameplay is not enabled yet.'
                   : 'Waiting to contact the System service.'}
         </p>
       </div>
@@ -188,7 +199,7 @@ function SystemScreen() {
             </p>
             <div className={styles.heroNotice}>
               <Icon name="lock" width="16" height="16" />
-              <span>Account and character creation are not available yet.</span>
+              <span>Account access is available. Character creation is not enabled yet.</span>
             </div>
           </div>
           <div className={styles.heroFooter}>
@@ -247,8 +258,8 @@ function SystemScreen() {
       <div className={styles.foundationNote}>
         <Icon name="shield" width="18" height="18" />
         <p>
-          <strong>An honest beginning.</strong> This release establishes the System interface and
-          service connection. A persistent world comes next.
+          <strong>An honest beginning.</strong> Account access can now be established. Persistent
+          character identity and gameplay still come next.
         </p>
       </div>
     </>
@@ -313,6 +324,7 @@ export function App() {
   const currentTitle =
     navigation.find((item) => item.path === location.pathname)?.label ??
     plannedScreens[location.pathname.slice(1) as keyof typeof plannedScreens]?.title ??
+    accountTitles[location.pathname] ??
     'Page not found';
 
   useEffect(() => {
@@ -379,6 +391,7 @@ export function App() {
               <Icon name="identity" />
               <span>System ID</span>
             </NavLink>
+            <AccountControl />
           </div>
         </header>
         <main id="main-content" className={styles.main} ref={mainRef} tabIndex={-1}>
@@ -387,6 +400,10 @@ export function App() {
             {Object.entries(plannedScreens).map(([path, screen]) => (
               <Route key={path} path={`/${path}`} element={<PlannedScreen screen={screen} />} />
             ))}
+            <Route path="/account/sign-in" element={<AccountAccess mode="sign-in" />} />
+            <Route path="/account/register" element={<AccountAccess mode="register" />} />
+            <Route path="/account/recovery" element={<Recovery />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="*" element={<NotFoundScreen />} />
           </Routes>
           <footer className={styles.footer}>

@@ -623,6 +623,178 @@
   background: #204739;
 }
 
+.accountPanel {
+  width: min(100%, 560px);
+  margin: 26px auto 70px;
+  padding: clamp(28px, 5vw, 48px);
+  border: 1px solid var(--hw-border);
+  border-radius: var(--hw-radius);
+  background: radial-gradient(circle at 100% 0, #17372f4d, transparent 36%), var(--hw-panel);
+  box-shadow: 0 24px 70px #00000033;
+}
+.accountIcon {
+  width: 58px;
+  height: 58px;
+  margin-bottom: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #315448;
+  border-radius: 50%;
+  color: var(--hw-accent);
+  background: #122a27;
+}
+.accountPanel h1 {
+  margin-top: 11px;
+  font-size: clamp(27px, 4vw, 36px);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+}
+.accountLead {
+  margin-top: 15px;
+  color: var(--hw-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.accountForm {
+  margin-top: 30px;
+  display: grid;
+}
+.accountForm label {
+  margin: 18px 0 8px;
+  color: var(--hw-muted);
+  font: 9px var(--hw-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.accountForm input {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 13px;
+  border: 1px solid #2c3d49;
+  border-radius: 5px;
+  outline: none;
+  background: #090f16;
+  color: var(--hw-text);
+  font: 14px var(--hw-font);
+}
+.accountForm input:hover {
+  border-color: #3b5060;
+}
+.accountForm input:focus-visible {
+  border-color: var(--hw-accent);
+  box-shadow: 0 0 0 3px #81e9cc1f;
+}
+.accountForm input:disabled {
+  opacity: 0.6;
+}
+.fieldHint {
+  margin-top: 8px;
+  color: var(--hw-dim);
+  font-size: 11px;
+}
+.formMessage {
+  min-height: 38px;
+  padding-top: 13px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.formError {
+  color: #f0a9a9;
+}
+.formSuccess {
+  color: var(--hw-accent);
+}
+.accountPrimaryButton {
+  min-height: 48px;
+  padding: 11px 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #4b796b;
+  border-radius: 5px;
+  background: #183a31;
+  color: #d2ffef;
+  font: 600 12px var(--hw-font);
+  cursor: pointer;
+}
+.accountPrimaryButton:hover:not(:disabled) {
+  border-color: var(--hw-accent);
+  background: #204739;
+}
+.accountPrimaryButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.accountLinks {
+  margin-top: 21px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px 24px;
+}
+.accountLinks a {
+  color: var(--hw-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+.accountLinks a:hover {
+  color: var(--hw-accent);
+}
+.accountBoundary {
+  margin-top: 28px;
+  padding-top: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-top: 1px solid var(--hw-border-soft);
+  color: var(--hw-dim);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.accountBoundary svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--hw-accent);
+}
+.accountState {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--hw-dim);
+  font-size: 11px;
+}
+.accountLink {
+  white-space: nowrap;
+}
+.accountControl {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.accountControl > span {
+  max-width: 210px;
+  overflow: hidden;
+  color: var(--hw-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accountControl button {
+  min-height: 35px;
+  padding: 7px 10px;
+  border: 1px solid var(--hw-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hw-muted);
+  font: 10px var(--hw-font);
+  cursor: pointer;
+}
+.accountControl button:hover:not(:disabled) {
+  border-color: #4b796b;
+  color: var(--hw-accent);
+}
+
 @media (min-width: 1550px) {
   .heroArtwork {
     right: -52px;
@@ -802,6 +974,13 @@
   .headerActions a span {
     display: none;
   }
+  .accountControl > span,
+  .accountState {
+    display: none;
+  }
+  .accountPanel {
+    margin-top: 6px;
+  }
   .main {
     padding: 26px 22px 0;
   }
@@ -828,6 +1007,16 @@
   }
 }
 @media (max-width: 520px) {
+  .accountPanel {
+    margin-bottom: 32px;
+    padding: 25px 20px;
+  }
+  .accountIcon {
+    margin-bottom: 23px;
+  }
+  .accountLinks {
+    flex-direction: column;
+  }
   .main {
     padding-left: 18px;
     padding-right: 18px;

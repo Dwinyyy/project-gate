@@ -305,35 +305,35 @@ git commit -m "feat: add browser account auth adapter"
 - Consumes: `AuthController` from Task 3.
 - Produces: `/account/sign-in`, `/account/register`, `/account/recovery`, and `/auth/callback` routes plus a signed-in account control in the System shell.
 
-- [ ] **Step 1: Write failing browser acceptance for anonymous access**
+- [x] **Step 1: Write failing browser acceptance for anonymous access**
 
 Verify visible, keyboard-usable forms with labels; 12-character client validation; no password in URL; registration confirmation state; sign-in error state; recovery confirmation state; callback loading/error state; and no horizontal overflow at 390px.
 
-- [ ] **Step 2: Run the player browser tests and confirm the routes are absent**
+- [x] **Step 2: Run the player browser tests and confirm the routes are absent**
 
-Run: `pnpm test:e2e -- --grep "player account access"`
+Run: `pnpm exec playwright test --grep "player account access"`
 
 Expected: failure because the account routes and controls do not exist.
 
-- [ ] **Step 3: Add a provider and focused auth screens**
+- [x] **Step 3: Add a provider and focused auth screens**
 
 Initialize once, subscribe with `useSyncExternalStore`, dispose on unmount, disable forms while requests are pending, announce outcomes with `aria-live`, and retain email but never password after an error. The existing public foundation shell remains visible to anonymous visitors; character surfaces remain explicitly unavailable until Tasks 2.2–2.5.
 
-- [ ] **Step 4: Add verification and recovery callback behavior**
+- [x] **Step 4: Add verification and recovery callback behavior**
 
 The callback waits for PKCE/session processing and offers a safe retry path. The recovery page accepts a new 12-character password only while the controller is in recovery/authenticated state and signs out other sessions after a successful password change.
 
-- [ ] **Step 5: Add signed-in and sign-out states**
+- [x] **Step 5: Add signed-in and sign-out states**
 
 Show the account email as private self-only UI, provide sign-out, and call the validated self-session endpoint before describing the session as verified. A provider session without a successful API validation is shown as unavailable, not authenticated gameplay authority.
 
-- [ ] **Step 6: Verify player auth UI and unchanged foundation honesty**
+- [x] **Step 6: Verify player auth UI and unchanged foundation honesty**
 
 Run: `pnpm test:e2e`
 
 Expected: account journeys pass against controlled provider fixtures; existing foundation navigation and unavailable-gameplay statements remain correct.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/player/src/auth apps/player/src/main.tsx apps/player/src/App.tsx apps/player/src/App.module.css tests/e2e/foundation.spec.ts
@@ -363,7 +363,7 @@ Verify password sign-in never opens the workspace at `aal1`; unprovisioned users
 
 - [ ] **Step 2: Run the focused operator browser tests and confirm MFA UI is absent**
 
-Run: `pnpm test:e2e -- --grep "operator MFA"`
+Run: `pnpm exec playwright test --grep "operator MFA"`
 
 Expected: failure because operator sign-in and MFA states do not exist.
 
@@ -379,7 +379,7 @@ An authorized session may show the operator workspace boundary and granted permi
 
 Run: `pnpm exec vitest run tests/unit/api.test.ts`
 
-Run: `pnpm test:e2e -- --grep "operator"`
+Run: `pnpm exec playwright test --grep "operator"`
 
 Expected: both independent operator gates and UI states pass.
 
