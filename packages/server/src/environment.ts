@@ -4,6 +4,7 @@ export interface ServerEnvironment {
   port: number;
   databaseUrl?: string;
   databaseSsl: boolean;
+  databaseSslCaPath?: string;
 }
 
 function booleanSetting(source: Record<string, string | undefined>, key: string): boolean {
@@ -25,6 +26,8 @@ export function parseEnvironment(source: Record<string, string | undefined>): Se
   }
   const databaseUrl = source.DATABASE_URL;
   const databaseSsl = booleanSetting(source, 'DATABASE_SSL');
+  const databaseSslCaPath = source.DATABASE_SSL_CA_PATH?.trim();
+  if (databaseSslCaPath && !databaseSsl) throw new Error('Database CA requires TLS');
   const simulator = booleanSetting(source, 'ENABLE_LOCATION_SIMULATOR');
   if (nodeEnv === 'production' && simulator)
     throw new Error('Production location simulator is forbidden');
@@ -49,5 +52,12 @@ export function parseEnvironment(source: Record<string, string | undefined>): Se
   }
   const host = source.HOST ?? '127.0.0.1';
   if (!host.trim()) throw new Error('HOST must not be empty');
-  return { nodeEnv, host, port, databaseSsl, ...(databaseUrl ? { databaseUrl } : {}) };
+  return {
+    nodeEnv,
+    host,
+    port,
+    databaseSsl,
+    ...(databaseUrl ? { databaseUrl } : {}),
+    ...(databaseSslCaPath ? { databaseSslCaPath } : {}),
+  };
 }

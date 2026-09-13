@@ -19,7 +19,7 @@
     "format": "prettier --write .",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
     "check:secrets": "tsx scripts/check-secrets.ts",
-    "test": "vitest run --exclude tests/integration/**",
+    "test": "vitest run --exclude 'tests/integration/**'",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
     "build": "pnpm build:server && pnpm build:player && pnpm build:operator && pnpm check:boundaries",

@@ -1,12 +1,15 @@
 import 'dotenv/config';
 import { createDatabase } from '@hunter-world/database';
-import { parseEnvironment } from '@hunter-world/server';
+import { databaseTls, parseEnvironment } from '@hunter-world/server';
 import { buildApp } from './app.js';
 
 async function main() {
   const environment = parseEnvironment(process.env);
   const database = environment.databaseUrl
-    ? createDatabase({ connectionString: environment.databaseUrl, ssl: environment.databaseSsl })
+    ? createDatabase({
+        connectionString: environment.databaseUrl,
+        ssl: await databaseTls(environment),
+      })
     : undefined;
   const app = buildApp({ logger: true, ...(database ? { database } : {}) });
   if (database) app.addHook('onClose', () => database.close());

@@ -1,13 +1,13 @@
 import 'dotenv/config';
 import { createDatabase } from '@hunter-world/database';
-import { createWorker, parseEnvironment } from '@hunter-world/server';
+import { createWorker, databaseTls, parseEnvironment } from '@hunter-world/server';
 
 async function main() {
   const environment = parseEnvironment(process.env);
   if (!environment.databaseUrl) throw new Error('Worker requires DATABASE_URL');
   const database = createDatabase({
     connectionString: environment.databaseUrl,
-    ssl: environment.databaseSsl,
+    ssl: await databaseTls(environment),
   });
   const worker = createWorker(database);
   let stopping = false;
