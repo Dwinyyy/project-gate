@@ -27,7 +27,7 @@ Current phase: Phase 1, with Task 1.4 partial. Phase 0 is complete. Next: finish
 
 Latest update: both connections are confirmed. Supabase `project-gate` (`zsejplglpfcmcikcydgb`) is healthy in Paris, PostgreSQL 17.6. Private GitHub `Dwinyyy/project-gate` grants read/write access and is configured as origin. Four canonical migrations are applied remotely with checksum receipts. Public API roles cannot access ops; runtime cannot migrate or enable feature controls. Auth health/settings returned HTTP 200. Queue helper search-path warnings were reproduced by a failing regression test and corrected with an additive migration; the remote security advisor now reports zero findings. Real PostgreSQL integration: 10 tests passed.
 
-Runtime connection is pending: the user was asked to save SUPABASE_DATABASE_PASSWORD in ignored .env, never chat. The first attempt found no setting; an empty setting is now present for the user to fill. `scripts/bootstrap-development.ts` targets only this development project, prepares a restricted runtime credential, and removes the owner password after successful verification. Run it after the value is supplied. Its helper has unit coverage; managed bootstrap has not run successfully. If TLS needs a project CA certificate, obtain the official certificate and retain verification. The finance project was not modified.
+Historical setup blocker (resolved below): the user was asked to save SUPABASE_DATABASE_PASSWORD in ignored .env, never chat. The first attempt found no setting; an empty setting is now present for the user to fill. `scripts/bootstrap-development.ts` targets only this development project, prepares a restricted runtime credential, and removes the owner password after successful verification. Run it after the value is supplied. Its helper has unit coverage; managed bootstrap has not run successfully. If TLS needs a project CA certificate, obtain the official certificate and retain verification. The finance project was not modified.
 
 ## Limitations and next dependency
 
@@ -36,3 +36,13 @@ This is a foundation shell and durable-work demonstration, not a playable multip
 Task 1.4 is partial: the user-selected managed development project replaces local Supabase containers; Docker remains absent. Runtime login/connection verification is outstanding. PostGIS will be installed with geographic queries. Do not substitute fake login or owner credentials for the restricted runtime role.
 
 Security checks are focused regression guards, not a completed security audit. Secret scanning catches selected credential patterns; import rules restrict first-party public dependencies. New asset-loading mechanisms and third-party packages still require review.
+
+## Managed runtime checkpoint — 2026-09-13
+
+- Owner credential was detected, used only for restricted-login setup, and removed from ignored `.env` after success. No credential was committed or printed.
+- Official Supabase CA downloaded from the dashboard source's production certificate URL. Verified CA fingerprint: `80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA`.
+- `scripts/verify-development.ts` passed: API readiness and worker startup using `hunter_runtime` over verified TLS. API and worker share certificate configuration.
+- Latest local `pnpm verify` passed: 33 unit/API tests, strict types, lint, boundary/credential guards and all builds. Formatting passed. Previous real PostgreSQL integration: 10 passed; browser: 3 passed.
+- GitHub initial CI failed because Bash expanded an unquoted test exclusion. Fixed in pushed commit `f22adbd`; workflow 34749205764 is pending verification.
+- Completed phases: Phase 0. Current Phase 1 final CI verification. Task 1.4 runtime blocker resolved; Phase 1 closure waits for CI. Next Task 2.1 real authentication, then 2.2–2.3 character persistence and creation.
+- Foundation preview remains a shell, not a playable game. No gameplay or authentication implementation is claimed.

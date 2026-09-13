@@ -1,9 +1,5 @@
-# Early-access market decision — pending
+# Early-access market decision
 
-Owner preference (2026-09-13): do not target the Philippines as the primary early-access market. Players from the Philippines may still join if availability permits. Evaluate the UK and US before choosing the primary market and hosting region.
+Owner-approved direction: EU-first early access, English interface, Paris Supabase hosting (`eu-west-3`). The Philippines is not the primary recruitment market, but participation from other countries may be allowed where supported. Earlier Singapore and UK-only assumptions are superseded.
 
-No UK/US choice is approved yet. Singapore remains a previous provisional hosting assumption, not a requirement. Do not create or relocate infrastructure on the assumption that a new region has been selected.
-
-Separate primary recruitment market, supported geographic content, store/download availability, and database location. Allowing installation outside a pilot area does not imply local Gates, venues or marketplace content exists there. Preserve the brief's physical-access rules and provide honest availability messaging.
-
-Choose the pilot city through actual recruitment, venue review and observed participation. Market size alone does not establish demand for this game's location requirements, tactical combat and permanent death. Moderate conduct individually using consistent rules.
+Recruitment region, actual supported venues, download availability and hosting location are separate decisions. Paris hosting does not select Paris as the pilot city. Confirm accessible venues and actual tester participation before geographic launch. Installation outside the pilot does not imply local Gates or market access.
