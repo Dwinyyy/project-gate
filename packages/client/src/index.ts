@@ -1,5 +1,21 @@
 import type { SystemStatus } from '@hunter-world/contracts';
 
+export {
+  AuthActionError,
+  createAuthControllerForBackend,
+  createBrowserAuthController,
+  getAuthConfig,
+  getOperatorSession,
+  getSelfSession,
+  type AuthBackend,
+  type AuthBackendEvent,
+  type AuthBackendSession,
+  type AuthController,
+  type AuthProblem,
+  type AuthSnapshot,
+  type TotpEnrollment,
+} from './auth.js';
+
 function isStatus(value: unknown): value is SystemStatus {
   if (!value || typeof value !== 'object') return false;
   const status = value as Record<string, unknown>;

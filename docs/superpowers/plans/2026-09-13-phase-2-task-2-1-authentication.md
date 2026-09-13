@@ -227,21 +227,21 @@ git commit -m "feat: enforce operator access with MFA"
 - Consumes: `GET /v1/auth/config`, Supabase Auth, and the public auth schemas.
 - Produces: `createBrowserAuthController`, `AuthSnapshot`, `AuthController`, `TotpEnrollment`, and bearer-authenticated `getSelfSession`/`getOperatorSession` helpers.
 
-- [ ] **Step 1: Add the exact SDK dependency**
+- [x] **Step 1: Add the exact SDK dependency**
 
 Run: `pnpm --filter @hunter-world/client add @supabase/supabase-js@2.116.0`
 
-- [ ] **Step 2: Write failing controller tests**
+- [x] **Step 2: Write failing controller tests**
 
 Cover initialization to anonymous/authenticated state, email sign-up awaiting verification, password sign-in, refresh-driven token replacement, sign-out, password-recovery state, password update, TOTP enrollment, TOTP challenge-and-verify, and cleanup of the auth subscription. Assert public controller state, not mock call counts.
 
-- [ ] **Step 3: Run the focused client test and confirm the adapter is missing**
+- [x] **Step 3: Run the focused client test and confirm the adapter is missing**
 
 Run: `pnpm exec vitest run tests/unit/auth-client.test.ts`
 
 Expected: failure because `createBrowserAuthController` does not exist.
 
-- [ ] **Step 4: Implement the React-neutral controller**
+- [x] **Step 4: Implement the React-neutral controller**
 
 ```ts
 export interface AuthSnapshot {
@@ -268,17 +268,17 @@ export interface AuthController {
 
 Use `flowType: 'pkce'`, `autoRefreshToken: true`, `detectSessionInUrl: true`, and `persistSession: true`. The controller may use `getSession()` only to forward the bearer token; the API remains the identity and authorization authority.
 
-- [ ] **Step 5: Implement safe user-facing error categories**
+- [x] **Step 5: Implement safe user-facing error categories**
 
 Map provider failures to stable categories such as invalid credentials, verification required, rate limited, expired link, and unavailable. Never display raw provider payloads or store passwords/MFA codes in controller state.
 
-- [ ] **Step 6: Verify the client adapter**
+- [x] **Step 6: Verify the client adapter**
 
 Run: `pnpm exec vitest run tests/unit/auth-client.test.ts`
 
 Expected: all controller transitions pass with no logged credentials.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add package.json pnpm-lock.yaml packages/client/package.json packages/client/src/auth.ts packages/client/src/index.ts tests/unit/auth-client.test.ts
