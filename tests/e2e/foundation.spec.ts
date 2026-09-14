@@ -107,6 +107,7 @@ test('player navigation, real API response and responsive layout', async ({ page
 });
 
 test('operator screen and endpoint remain locked', async ({ page, request }) => {
+  await useControlledAuth(page, 5174);
   await page.goto('http://127.0.0.1:5174');
   await expect(page.getByText('Operator access locked')).toBeVisible();
   const response = await request.post('http://127.0.0.1:3001/v1/operator/feature-controls', {
