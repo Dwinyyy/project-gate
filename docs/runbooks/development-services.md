@@ -26,6 +26,8 @@ Do not add wildcard or production redirect origins to development configuration.
 
 Run `pnpm exec tsx scripts/verify-development.ts` for a non-mutating managed check. It verifies Auth health, email signup with confirmation required, phone sign-in disabled, the API's public configuration projection, rejection of fabricated player/operator tokens, restricted database readiness and worker startup. It deliberately does not register users, send email, enroll an authenticator or record any token or MFA secret. A full live journey needs a dedicated test inbox and separately provisioned operator identity.
 
+Repository settings for the two domain-free Vercel development frontends, their fail-closed API proxy, and the exact managed redirect procedure are in [the Vercel frontend runbook](vercel-frontends.md). No Vercel project, public API, or deployed callback origin has been provisioned yet.
+
 ## Verified TLS and repeatable health check
 
 `DATABASE_SSL=true` and `DATABASE_SSL_CA_PATH=.cache/supabase-ca.crt` select the verified provider CA for the API, worker and non-mutating verification. A missing certificate fails closed.

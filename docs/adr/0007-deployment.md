@@ -1,6 +1,6 @@
 # ADR 0007 — Hosting and operational separation
 
-Status: accepted planning decision from the approved master blueprint; implementation is tracked separately.
+Status: accepted planning decision from the approved master blueprint; the pre-production frontend-preview portion is superseded by [ADR 0009](0009-vercel-development-frontends.md), while the production and persistent-service decisions remain unchanged.
 
 ## Context
 
@@ -8,7 +8,7 @@ Persistent services support committed encounters and obligations. Matching nearb
 
 ## Decision
 
-Render player/operator deployments and persistent API/worker; Supabase database/Auth/Storage. Separate local, staging and production databases and secrets; GitHub Actions checks; plan Singapore pending latency verification.
+Render player/operator production deployments and persistent API/worker; Supabase database/Auth/Storage. Separate local, staging and production databases and secrets; GitHub Actions checks; plan Singapore pending latency verification. ADR 0009 permits Vercel-hosted player/operator development previews without moving authoritative services or approving a production release.
 
 ## Consequences and alternatives
 

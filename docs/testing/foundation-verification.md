@@ -1,4 +1,4 @@
-# Foundation and Phase 2 verification — 2026-09-13
+# Foundation and Phase 2 verification — 2026-09-14
 
 ## Current checkpoint
 
@@ -9,7 +9,8 @@ Completed phases: **0 and 1**. Active: **Phase 2, Task 2.1** authentication. Tas
 - Complete canonical brief, approved blueprint, 173-task ledger, 32 requirements, 28 acceptance cases, 12 invariants and ADRs persisted.
 - React player/operator shells, typed public API, Fastify API and worker builds pass. Player registration, sign-in, verification callback, sign-out and recovery screens are connected through a React-neutral Supabase adapter. A provider session is not presented as server-verified until the API validates it.
 - Operator password access, TOTP enrollment/challenge, AAL2 validation and the independent active-operator database grant are implemented. Enrollment QR/secret material is cleared outside the enrollment step. Administrative mutation routes remain closed.
-- Latest `pnpm verify`: 65 unit/API tests, strict types, lint, boundary/credential guards and all builds passed. Formatting passed. Vite reported a non-failing player chunk-size optimization advisory.
+- Latest `pnpm verify`: 81 unit/API tests, strict types, lint, boundary/credential guards and all root release builds passed. Formatting passed. Vite reported a non-failing player chunk-size optimization advisory.
+- Vercel Part B repository preparation is locally verified: both application-root `pnpm run build` commands emit ignored `dist` artifacts; 16 focused tests cover origin validation, fail-closed `/v1` behavior, ordered proxy/fallback rules, both app exports, and compilation through pinned `@vercel/config` 0.7.0. No Vercel project or deployment was created. Without `HUNTER_API_ORIGIN`, `/v1` is deliberately excluded from the SPA fallback and managed Auth remains unavailable.
 - Real PostgreSQL integration: 11 tests passed, including private operator tables, suspended-operator denial, runtime read-only grants, restart/retry without duplicate effects, transaction rollback and restricted permissions. Browser suite: 11 passed across foundation honesty, player accounts and operator MFA.
 - **GitHub run 34749247587 passed every check** on commit `f1b26e2`: clean frozen installation, verify, format, PostgreSQL integration and browser tests. Initial Linux wildcard failure was corrected.
 - Supabase `project-gate` (`zsejplglpfcmcikcydgb`) is healthy in Paris. Five canonical migrations are applied with checksum receipts. The operator migration created no operator identities; runtime has read-only access while `anon` and `authenticated` have none. The current security advisor reports zero findings; performance notices are pre-existing pg-boss informational items.
@@ -26,4 +27,4 @@ CA: official Supabase dashboard source URL documented in development-services.md
 
 ## Limitations
 
-Preview is an account-enabled foundation shell, not a playable game. No dedicated test inbox or provisioned operator identity was available, so managed registration → email verification → refresh → recovery → password update → sign-out and operator sign-in → TOTP enrollment → AAL2 grant check → sign-out remain not-run. Task 2.1 therefore remains in progress. Characters, gameplay, economy, location, mobile packaging and production deployment are not implemented. A01–A28 gameplay cases remain not-run. Focused security checks are not a full audit. PostGIS belongs with geographic queries.
+Preview is an account-enabled foundation shell, not a playable game. The repository has Vercel frontend configuration but no Vercel projects, generated deployment URLs, public persistent API origin, or deployed callbacks. No dedicated test inbox or provisioned operator identity was available, so managed registration → email verification → refresh → recovery → password update → sign-out and operator sign-in → TOTP enrollment → AAL2 grant check → sign-out remain not-run. Task 2.1 therefore remains in progress. Characters, gameplay, economy, location, mobile packaging and production deployment are not implemented. A01–A28 gameplay cases remain not-run. Focused security checks are not a full audit. PostGIS belongs with geographic queries.

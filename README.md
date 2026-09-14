@@ -49,6 +49,17 @@ Playwright starts isolated API/player/operator processes on ports 3001/5173/5174
 
 Production-format artifacts are built under `dist/server`, `dist/player`, and `dist/operator`. Server artifacts bundle internal workspace code and require the pinned production npm dependencies. No deployment has been performed.
 
+## Vercel development frontends
+
+The repository is prepared for separate player and operator Vercel projects without requiring a custom domain. The app-root commands below create Vercel-shaped static outputs in ignored app-local `dist` directories:
+
+```sh
+pnpm --filter @hunter-world/player build
+pnpm --filter @hunter-world/operator build
+```
+
+This preparation does not deploy either shell. Until a real persistent API origin is assigned through the server-only Vercel variable `HUNTER_API_ORIGIN`, `/v1` deliberately remains outside the SPA fallback and account access stays unavailable. The Fastify API and worker are not Vercel frontend workloads. Follow the [Vercel frontend runbook](docs/runbooks/vercel-frontends.md) for exact project settings, generated-domain callbacks, and limitations.
+
 ## Continue implementation
 
 Read [AGENTS.md](AGENTS.md), [task ledger](docs/tasks/ledger.md), and the relevant [original brief](docs/product/source/final-brief-v1.pdf). Current evidence and remaining setup are recorded in [foundation verification](docs/testing/foundation-verification.md). Task IDs remain stable across sessions.
