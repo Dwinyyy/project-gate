@@ -10,6 +10,7 @@ function accessToken(overrides: Record<string, unknown> = {}): string {
       exp: Math.floor(Date.now() / 1000) + 600,
       aal: 'aal2',
       session_id: '22222222-2222-4222-8222-222222222222',
+      amr: [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 }],
       ...overrides,
     }),
   ).toString('base64url');
@@ -53,7 +54,49 @@ describe('Supabase access-token verifier', () => {
       emailVerified: true,
       sessionId: '22222222-2222-4222-8222-222222222222',
       aal: 'aal2',
+      accessMode: 'standard',
     });
+  });
+
+  it('preserves the recovery restriction across later authentication-method entries', async () => {
+    const token = accessToken({
+      amr: [
+        { method: 'token_refresh', timestamp: Math.floor(Date.now() / 1000) },
+        { method: 'recovery', timestamp: Math.floor(Date.now() / 1000) - 60 },
+      ],
+    });
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'player@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+        }),
+      ),
+    });
+
+    await expect(verifier.verify(token)).resolves.toMatchObject({ accessMode: 'recovery' });
+  });
+
+  it('accepts RFC string AMR while preserving its recovery restriction', async () => {
+    const token = accessToken({ amr: ['token_refresh', 'recovery'] });
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'player@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+        }),
+      ),
+    });
+
+    await expect(verifier.verify(token)).resolves.toMatchObject({ accessMode: 'recovery' });
   });
 
   it('treats provider rejection as unauthenticated', async () => {
@@ -98,5 +141,32 @@ describe('Supabase access-token verifier', () => {
     });
 
     await expect(verifier.verify(malformedToken)).resolves.toBeNull();
+  });
+
+  it.each([
+    ['missing AMR', undefined],
+    ['empty AMR', []],
+    ['non-array AMR', 'recovery'],
+    ['mixed AMR formats', ['password', { method: 'recovery', timestamp: 1_789_318_800 }]],
+    ['missing method', [{ timestamp: 1_789_318_800 }]],
+    ['empty method', [{ method: '', timestamp: 1_789_318_800 }]],
+    ['missing timestamp', [{ method: 'recovery' }]],
+    ['non-integer timestamp', [{ method: 'recovery', timestamp: 1.5 }]],
+  ])('fails closed for %s claims', async (_label, amr) => {
+    const token = accessToken({ amr });
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'player@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+        }),
+      ),
+    });
+
+    await expect(verifier.verify(token)).resolves.toBeNull();
   });
 });

@@ -324,7 +324,7 @@ Initialize once, subscribe with `useSyncExternalStore`, dispose on unmount, disa
 
 - [x] **Step 4: Add verification and recovery callback behavior**
 
-The callback waits for PKCE/session processing and offers a safe retry path. The recovery page accepts a new 12-character password only while the controller is in recovery/authenticated state and signs out other sessions after a successful password change.
+The callback waits for PKCE/session processing and offers a safe retry path. The recovery page accepts a new 12-character password only while the controller is in recovery state. Recovery mode is reconstructed from the JWT `amr` claim across initial load and refresh, locks navigation to the recovery page, cannot enter operator MFA, and is rejected by ordinary authenticated API routes. Successful password replacement signs out globally and requires an explicit sign-in with the new password.
 
 - [x] **Step 5: Add signed-in and sign-out states**
 
@@ -435,7 +435,7 @@ Expected: formatting, types, lint, boundaries, secret scan, unit/API tests, buil
 
 - [ ] **Step 4: Run a managed-provider happy-path checkpoint when a dedicated test inbox and provisioned operator identity are available**
 
-Exercise registration → email verification → sign-in → refresh → recovery → password update → sign-out. Separately exercise operator sign-in → TOTP enrollment → `aal2` challenge → current database grant check → sign-out. Record only IDs/timestamps and redacted artifacts; never record passwords, tokens, QR payloads, or MFA secrets.
+Exercise registration → email verification → sign-in → refresh → recovery-only restriction → password update → global sign-out → explicit sign-in. Separately exercise operator sign-in → TOTP enrollment → `aal2` challenge → current database grant check → sign-out. Record only IDs/timestamps and redacted artifacts; never record passwords, tokens, QR payloads, or MFA secrets.
 
 - [x] **Step 5: Update the ledger conservatively**
 

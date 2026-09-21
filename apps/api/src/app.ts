@@ -14,7 +14,7 @@ import {
   type SelfSession,
   type SystemStatus,
 } from '@hunter-world/contracts';
-import type { AuthVerifier } from '@hunter-world/server';
+import type { AuthIdentity, AuthVerifier } from '@hunter-world/server';
 import type { OperatorAccessStore } from '@hunter-world/database';
 
 export interface ApiOptions {
@@ -28,6 +28,21 @@ function bearerToken(authorization: string | undefined): string | null {
   if (!authorization || authorization.length > 8192) return null;
   const match = /^Bearer ([^\s,]+)$/.exec(authorization);
   return match?.[1] ?? null;
+}
+
+type StandardIdentityResult =
+  { kind: 'invalid' } | { kind: 'recovery' } | { kind: 'standard'; identity: AuthIdentity };
+
+async function verifyStandardIdentity(
+  authorization: string | undefined,
+  verifier: AuthVerifier,
+): Promise<StandardIdentityResult> {
+  const token = bearerToken(authorization);
+  if (!token) return { kind: 'invalid' };
+  const identity = await verifier.verify(token);
+  if (!identity) return { kind: 'invalid' };
+  if (identity.accessMode === 'recovery') return { kind: 'recovery' };
+  return { kind: 'standard', identity };
 }
 
 export function buildApp(options: ApiOptions = {}) {
@@ -105,22 +120,39 @@ export function buildApp(options: ApiOptions = {}) {
     {
       config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
       schema: {
-        response: { 200: selfSessionSchema, 401: errorResponseSchema, 503: errorResponseSchema },
+        response: {
+          200: selfSessionSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          503: errorResponseSchema,
+        },
       },
     },
     async (request, reply) => {
       if (!options.auth) {
         return reply.code(503).send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
       }
-      const token = bearerToken(request.headers.authorization);
-      if (!token) {
+      const verified = await verifyStandardIdentity(
+        request.headers.authorization,
+        options.auth.verifier,
+      );
+      if (verified.kind === 'invalid') {
         return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', requestId: request.id } });
       }
-      const identity: SelfSession | null = await options.auth.verifier.verify(token);
-      if (!identity) {
-        return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', requestId: request.id } });
+      if (verified.kind === 'recovery') {
+        return reply
+          .code(403)
+          .send({ error: { code: 'PASSWORD_UPDATE_REQUIRED', requestId: request.id } });
       }
-      return reply.code(200).send(identity);
+      const identity = verified.identity;
+      const session: SelfSession = {
+        authUserId: identity.authUserId,
+        email: identity.email,
+        emailVerified: identity.emailVerified,
+        sessionId: identity.sessionId,
+        aal: identity.aal,
+      };
+      return reply.code(200).send(session);
     },
   );
   app.get(
@@ -142,18 +174,21 @@ export function buildApp(options: ApiOptions = {}) {
           .code(503)
           .send({ error: { code: 'OPERATOR_AUTH_UNAVAILABLE', requestId: request.id } });
       }
-      const token = bearerToken(request.headers.authorization);
-      if (!token) {
+      const verified = await verifyStandardIdentity(
+        request.headers.authorization,
+        options.auth.verifier,
+      );
+      if (verified.kind === 'invalid') {
         return reply
           .code(401)
           .send({ error: { code: 'OPERATOR_AUTH_REQUIRED', requestId: request.id } });
       }
-      const identity = await options.auth.verifier.verify(token);
-      if (!identity) {
+      if (verified.kind === 'recovery') {
         return reply
-          .code(401)
-          .send({ error: { code: 'OPERATOR_AUTH_REQUIRED', requestId: request.id } });
+          .code(403)
+          .send({ error: { code: 'PASSWORD_UPDATE_REQUIRED', requestId: request.id } });
       }
+      const identity = verified.identity;
       const operator = await options.operators.findActiveOperator(identity.authUserId);
       if (!operator) {
         return reply

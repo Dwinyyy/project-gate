@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AuthActionError } from '@hunter-world/client';
 import { Icon } from '@hunter-world/ui';
 import { useAccountAuth } from './AuthProvider';
@@ -13,7 +13,8 @@ function safeMessage(error: unknown): string {
 
 export function Recovery() {
   const { controller, auth } = useAccountAuth();
-  const changingPassword = auth.phase === 'recovery' || auth.phase === 'authenticated';
+  const navigate = useNavigate();
+  const changingPassword = auth.phase === 'recovery';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -37,7 +38,7 @@ export function Recovery() {
         await controller.updatePassword(password);
         setPassword('');
         setConfirmation('');
-        setNotice('Your password has been updated. This session remains signed in.');
+        setNotice('Your password has been updated. Sign in with your new password.');
       } else {
         await controller.requestPasswordRecovery(
           email,
@@ -49,6 +50,23 @@ export function Recovery() {
       setPassword('');
       setConfirmation('');
       setError(safeMessage(submitError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelRecovery() {
+    setBusy(true);
+    setNotice(null);
+    setError(null);
+    try {
+      if (!controller) {
+        throw new AuthActionError('unavailable', auth.error ?? 'Account access is loading.');
+      }
+      await controller.signOut();
+      navigate('/account/sign-in', { replace: true });
+    } catch (cancelError) {
+      setError(safeMessage(cancelError));
     } finally {
       setBusy(false);
     }
@@ -115,7 +133,18 @@ export function Recovery() {
         </button>
       </form>
       <div className={styles.accountLinks}>
-        <Link to="/account/sign-in">Return to sign in</Link>
+        {changingPassword ? (
+          <button
+            className={styles.textButton}
+            type="button"
+            disabled={busy}
+            onClick={() => void cancelRecovery()}
+          >
+            Cancel recovery and sign out
+          </button>
+        ) : (
+          <Link to="/account/sign-in">Return to sign in</Link>
+        )}
       </div>
     </section>
   );

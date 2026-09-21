@@ -109,7 +109,7 @@ function ConnectedAccountProvider({
 
   useEffect(() => {
     let active = true;
-    if (!auth.accessToken) {
+    if (!auth.accessToken || auth.phase === 'recovery') {
       setValidated({ token: null, session: null, error: null });
       return () => {
         active = false;
@@ -144,15 +144,16 @@ function ConnectedAccountProvider({
     return () => {
       active = false;
     };
-  }, [auth.accessToken, auth.user?.id]);
+  }, [auth.accessToken, auth.phase, auth.user?.id]);
 
-  const validation = !auth.accessToken
-    ? 'none'
-    : validated.token !== auth.accessToken || (!validated.session && !validated.error)
-      ? 'checking'
-      : validated.session
-        ? 'valid'
-        : 'invalid';
+  const validation =
+    !auth.accessToken || auth.phase === 'recovery'
+      ? 'none'
+      : validated.token !== auth.accessToken || (!validated.session && !validated.error)
+        ? 'checking'
+        : validated.session
+          ? 'valid'
+          : 'invalid';
   const value = useMemo<AccountContextValue>(
     () => ({
       controller,

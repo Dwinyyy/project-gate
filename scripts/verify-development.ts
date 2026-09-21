@@ -59,6 +59,7 @@ function fabricatedAccessToken(): string {
     exp: Math.floor(Date.now() / 1000) + 300,
     aal: 'aal1',
     session_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    amr: [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 }],
   })}.invalid-signature`;
 }
 

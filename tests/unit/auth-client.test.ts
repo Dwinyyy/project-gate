@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AuthActionError,
+  authAccessModeFromToken,
   createAuthControllerForBackend,
   getAuthConfig,
   getOperatorSession,
@@ -12,14 +13,25 @@ import {
 
 const user = { id: '11111111-1111-4111-8111-111111111111', email: 'player@example.test' };
 
-function session(accessToken: string): AuthBackendSession {
-  return { accessToken, user };
+function accessToken(amr: unknown): string {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ amr })}.fixture`;
+}
+
+function session(
+  accessToken: string,
+  accessMode: 'standard' | 'recovery' = 'standard',
+): AuthBackendSession {
+  return { accessToken, user, accessMode } as AuthBackendSession & {
+    accessMode: 'standard' | 'recovery';
+  };
 }
 
 class MemoryAuthBackend implements AuthBackend {
   currentSession: AuthBackendSession | null = null;
   verifiedFactorIds: string[] = [];
   assurance: 'aal1' | 'aal2' = 'aal1';
+  readonly signOutScopes: Array<'global' | 'others'> = [];
   readonly listeners = new Set<
     (event: AuthBackendEvent, session: AuthBackendSession | null) => void
   >();
@@ -57,6 +69,7 @@ class MemoryAuthBackend implements AuthBackend {
   }
 
   async signOut(scope: 'global' | 'others') {
+    this.signOutScopes.push(scope);
     if (scope === 'global') this.currentSession = null;
     return { data: undefined, error: null };
   }
@@ -175,8 +188,53 @@ describe('browser Auth controller', () => {
     expect(controller.getSnapshot().phase).toBe('recovery');
     await controller.updatePassword('replacement-password');
     expect(controller.getSnapshot()).toMatchObject({
-      phase: 'authenticated',
-      accessToken: 'refreshed-token',
+      phase: 'anonymous',
+      accessToken: null,
+    });
+    expect(backend.signOutScopes).toEqual(['global']);
+  });
+
+  it('reconstructs recovery mode during initialization and token refresh', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('stored-recovery-token', 'recovery');
+    const controller = createAuthControllerForBackend(backend);
+
+    await controller.ready();
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'recovery',
+      accessToken: 'stored-recovery-token',
+    });
+
+    backend.emit('TOKEN_REFRESHED', session('refreshed-recovery-token', 'recovery'));
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'recovery',
+      accessToken: 'refreshed-recovery-token',
+    });
+  });
+
+  it('allows password replacement only from recovery and blocks MFA operations there', async () => {
+    const standardBackend = new MemoryAuthBackend();
+    standardBackend.currentSession = session('standard-token');
+    const standardController = createAuthControllerForBackend(standardBackend);
+    await standardController.ready();
+
+    await expect(standardController.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'recovery_required',
+    });
+
+    const recoveryBackend = new MemoryAuthBackend();
+    recoveryBackend.currentSession = session('recovery-token', 'recovery');
+    const recoveryController = createAuthControllerForBackend(recoveryBackend);
+    await recoveryController.ready();
+
+    await expect(recoveryController.getMfaStatus()).rejects.toMatchObject({
+      code: 'password_update_required',
+    });
+    await expect(recoveryController.enrollTotp()).rejects.toMatchObject({
+      code: 'password_update_required',
+    });
+    await expect(recoveryController.verifyTotp('factor-1', '123456')).rejects.toMatchObject({
+      code: 'password_update_required',
     });
   });
 
@@ -239,6 +297,33 @@ describe('browser Auth controller', () => {
     await expect(controller.signIn('player@example.test', 'long-enough-password')).rejects.toEqual(
       new AuthActionError('invalid_credentials', 'The email or password is incorrect.'),
     );
+  });
+});
+
+describe('browser Auth token boundary', () => {
+  it.each([
+    ['detailed password AMR', [{ method: 'password', timestamp: 1_789_318_800 }], 'standard'],
+    [
+      'refreshed detailed recovery AMR',
+      [
+        { method: 'token_refresh', timestamp: 1_789_318_860 },
+        { method: 'recovery', timestamp: 1_789_318_800 },
+      ],
+      'recovery',
+    ],
+    ['RFC string recovery AMR', ['token_refresh', 'recovery'], 'recovery'],
+  ] as const)('derives %s safely', (_label, amr, expected) => {
+    expect(authAccessModeFromToken(accessToken(amr))).toBe(expected);
+  });
+
+  it.each([
+    ['missing AMR', undefined],
+    ['empty AMR', []],
+    ['non-array AMR', 'recovery'],
+    ['mixed AMR formats', ['password', { method: 'recovery', timestamp: 1_789_318_800 }]],
+    ['malformed detailed AMR', [{ method: 'recovery' }]],
+  ])('fails closed for %s', (_label, amr) => {
+    expect(authAccessModeFromToken(accessToken(amr))).toBeNull();
   });
 });
 

@@ -19,6 +19,9 @@ export function AccountControl() {
       </Link>
     );
   }
+  if (auth.phase === 'recovery') {
+    return <span className={styles.accountState}>Recovery in progress</span>;
+  }
   if (validation === 'checking') {
     return <span className={styles.accountState}>Checking session…</span>;
   }

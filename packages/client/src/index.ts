@@ -2,6 +2,7 @@ import type { SystemStatus } from '@hunter-world/contracts';
 
 export {
   AuthActionError,
+  authAccessModeFromToken,
   createAuthControllerForBackend,
   createBrowserAuthController,
   getAuthConfig,

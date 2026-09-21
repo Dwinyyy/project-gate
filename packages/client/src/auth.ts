@@ -9,6 +9,8 @@ export type AuthProblem =
   | 'expired_link'
   | 'invalid_code'
   | 'unauthenticated'
+  | 'recovery_required'
+  | 'password_update_required'
   | 'mfa_required'
   | 'operator_access_denied'
   | 'unavailable';
@@ -31,6 +33,7 @@ export interface AuthBackendUser {
 export interface AuthBackendSession {
   accessToken: string;
   user: AuthBackendUser;
+  accessMode: 'standard' | 'recovery';
 }
 
 export type AuthBackendEvent =
@@ -174,12 +177,66 @@ function requireData<T>(result: AuthBackendResult<T>): T {
   return result.data;
 }
 
+function decodeJwtPayload(accessToken: string): Record<string, unknown> | null {
+  const parts = accessToken.split('.');
+  if (parts.length !== 3 || !parts[1] || !/^[A-Za-z0-9_-]+$/.test(parts[1])) return null;
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+    const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function authenticationMethods(amr: unknown): string[] | null {
+  if (!Array.isArray(amr) || amr.length === 0) return null;
+  if (amr.every((entry) => typeof entry === 'string')) {
+    const methods = amr as string[];
+    return methods.every((method) => method.length > 0 && method.length <= 64) ? methods : null;
+  }
+  if (
+    amr.every((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const record = entry as Record<string, unknown>;
+      return (
+        typeof record.method === 'string' &&
+        record.method.length > 0 &&
+        record.method.length <= 64 &&
+        typeof record.timestamp === 'number' &&
+        Number.isSafeInteger(record.timestamp) &&
+        record.timestamp >= 0
+      );
+    })
+  ) {
+    return (amr as Array<{ method: string }>).map((entry) => entry.method);
+  }
+  return null;
+}
+
+// UI restriction only. Server authorization independently validates the exact token with Supabase.
+export function authAccessModeFromToken(
+  accessToken: string,
+): AuthBackendSession['accessMode'] | null {
+  const payload = decodeJwtPayload(accessToken);
+  const methods = payload ? authenticationMethods(payload.amr) : null;
+  if (!methods) return null;
+  return methods.includes('recovery') ? 'recovery' : 'standard';
+}
+
 function snapshotForSession(
   session: AuthBackendSession | null,
-  phase: 'authenticated' | 'recovery' = 'authenticated',
+  forceRecovery = false,
 ): AuthSnapshot {
   return session
-    ? { phase, user: session.user, accessToken: session.accessToken, error: null }
+    ? {
+        phase: forceRecovery || session.accessMode === 'recovery' ? 'recovery' : 'authenticated',
+        user: session.user,
+        accessToken: session.accessToken,
+        error: null,
+      }
     : { phase: 'anonymous', user: null, accessToken: null, error: null };
 }
 
@@ -200,9 +257,7 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
   };
   const unsubscribeBackend = backend.subscribe((event, nextSession) => {
     revision += 1;
-    publish(
-      snapshotForSession(nextSession, event === 'PASSWORD_RECOVERY' ? 'recovery' : 'authenticated'),
-    );
+    publish(snapshotForSession(nextSession, event === 'PASSWORD_RECOVERY'));
   });
   const initializationRevision = revision;
   const readyPromise = backend
@@ -267,14 +322,25 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
     },
     async updatePassword(password) {
       validatePassword(password);
+      if (snapshot.phase !== 'recovery') {
+        throw new AuthActionError(
+          'recovery_required',
+          'Open a fresh password-recovery link before choosing a new password.',
+        );
+      }
       const updated = await backend.updatePassword(password);
       if (updated.error) throw actionError(updated.error);
-      const signedOut = await backend.signOut('others');
+      const signedOut = await backend.signOut('global');
       if (signedOut.error) throw actionError(signedOut.error);
-      const nextSession = requireData(await backend.refreshSession());
-      publish(snapshotForSession(nextSession));
+      publish(snapshotForSession(null));
     },
     async getMfaStatus() {
+      if (snapshot.phase === 'recovery') {
+        throw new AuthActionError(
+          'password_update_required',
+          'Complete password recovery and sign in again before using an authenticator.',
+        );
+      }
       const state = requireData(await backend.getMfaState());
       return {
         assurance:
@@ -287,6 +353,12 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       };
     },
     async enrollTotp() {
+      if (snapshot.phase === 'recovery') {
+        throw new AuthActionError(
+          'password_update_required',
+          'Complete password recovery and sign in again before using an authenticator.',
+        );
+      }
       const enrollment = requireData(await backend.enrollTotp());
       return {
         ...enrollment,
@@ -296,6 +368,12 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       };
     },
     async verifyTotp(factorId, code) {
+      if (snapshot.phase === 'recovery') {
+        throw new AuthActionError(
+          'password_update_required',
+          'Complete password recovery and sign in again before using an authenticator.',
+        );
+      }
       if (!factorId || !/^\d{6}$/.test(code)) {
         throw new AuthActionError('invalid_input', 'Enter the six-digit authenticator code.');
       }
@@ -324,10 +402,13 @@ function backendError(
 }
 
 function backendSession(value: Session | null): AuthBackendSession | null {
-  return value
+  if (!value) return null;
+  const accessMode = authAccessModeFromToken(value.access_token);
+  return accessMode
     ? {
         accessToken: value.access_token,
         user: { id: value.user.id, email: value.user.email ?? null },
+        accessMode,
       }
     : null;
 }
@@ -413,13 +494,16 @@ function createSupabaseBackend(client: SupabaseClient): AuthBackend {
     },
     async verifyTotp(input) {
       const { data, error } = await client.auth.mfa.challengeAndVerify(input);
+      const accessMode = data ? authAccessModeFromToken(data.access_token) : null;
       return {
-        data: data
-          ? {
-              accessToken: data.access_token,
-              user: { id: data.user.id, email: data.user.email ?? null },
-            }
-          : null,
+        data:
+          data && accessMode
+            ? {
+                accessToken: data.access_token,
+                user: { id: data.user.id, email: data.user.email ?? null },
+                accessMode,
+              }
+            : null,
         error: backendError(error),
       };
     },
@@ -519,6 +603,12 @@ async function sessionRequest(
       }
       if (code === 'OPERATOR_ACCESS_DENIED') {
         throw new AuthActionError('operator_access_denied', 'This account has no operator access.');
+      }
+      if (code === 'PASSWORD_UPDATE_REQUIRED') {
+        throw new AuthActionError(
+          'password_update_required',
+          'Complete password recovery and sign in again to continue.',
+        );
       }
       if (response.status === 401) {
         throw new AuthActionError('unauthenticated', 'Your session has expired. Sign in again.');

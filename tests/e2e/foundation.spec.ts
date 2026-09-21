@@ -3,6 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 const operatorUserId = '22222222-2222-4222-8222-222222222222';
 const operatorSessionId = '33333333-3333-4333-8333-333333333333';
 const operatorFactorId = '44444444-4444-4444-8444-444444444444';
+const playerUserId = '11111111-1111-4111-8111-111111111111';
+const playerSessionId = '55555555-5555-4555-8555-555555555555';
 
 interface TestFactor {
   id: string;
@@ -13,7 +15,7 @@ interface TestFactor {
   updated_at: string;
 }
 
-function accessToken(aal: 'aal1' | 'aal2'): string {
+function accessToken(aal: 'aal1' | 'aal2', method = 'password'): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
     sub: operatorUserId,
@@ -23,7 +25,7 @@ function accessToken(aal: 'aal1' | 'aal2'): string {
     aud: 'authenticated',
     role: 'authenticated',
     email: 'operator@example.test',
-    amr: [{ method: 'password', timestamp: 1_789_318_800 }],
+    amr: [{ method, timestamp: 1_789_318_800 }],
   })}.fixture`;
 }
 
@@ -55,6 +57,53 @@ function passwordSession(aal: 'aal1' | 'aal2', factors: TestFactor[]) {
   };
 }
 
+function operatorRecoverySession() {
+  return {
+    ...passwordSession('aal1', []),
+    access_token: accessToken('aal1', 'recovery'),
+    refresh_token: 'fixture-operator-recovery-refresh',
+  };
+}
+
+function playerUser() {
+  return {
+    id: playerUserId,
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'player@example.test',
+    email_confirmed_at: '2026-09-13T12:00:00.000Z',
+    phone: '',
+    app_metadata: { provider: 'email', providers: ['email'] },
+    user_metadata: {},
+    identities: [],
+    factors: [],
+    created_at: '2026-09-13T12:00:00.000Z',
+    updated_at: '2026-09-13T12:00:00.000Z',
+  };
+}
+
+function playerSession(method: 'password' | 'recovery') {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
+    sub: playerUserId,
+    exp: 2_000_000_000,
+    aal: 'aal1',
+    session_id: playerSessionId,
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'player@example.test',
+    amr: [{ method, timestamp: 1_789_318_800 }],
+  })}.fixture`;
+  return {
+    access_token: accessToken,
+    token_type: 'bearer',
+    expires_in: 3600,
+    expires_at: 2_000_000_000,
+    refresh_token: 'fixture-recovery-refresh',
+    user: playerUser(),
+  };
+}
+
 async function useControlledAuth(page: Page, port = 5173) {
   await page.route('**/v1/auth/config', (route) =>
     route.fulfill({
@@ -66,6 +115,23 @@ async function useControlledAuth(page: Page, port = 5173) {
       }),
     }),
   );
+}
+
+async function restorePlayerSession(page: Page, method: 'password' | 'recovery') {
+  await useControlledAuth(page);
+  await page.route('**/auth/v1/user', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(playerUser()),
+    }),
+  );
+  await page.goto('/account/sign-in');
+  await page.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: playerSession(method) },
+  );
+  await page.reload();
 }
 
 async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
@@ -207,6 +273,101 @@ test('player verification callback fails safely without a confirmed session', as
   await expect(page.getByRole('link', { name: 'Return to sign in' })).toBeVisible();
 });
 
+test('player recovery session stays locked to password replacement across navigation and reload', async ({
+  page,
+}) => {
+  let ordinarySessionRequests = 0;
+  await page.route('**/v1/auth/session', (route) => {
+    ordinarySessionRequests += 1;
+    return route.fulfill({
+      status: 403,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({ error: { code: 'PASSWORD_UPDATE_REQUIRED' } }),
+    });
+  });
+  await restorePlayerSession(page, 'recovery');
+
+  await expect(page).toHaveURL(/\/account\/recovery$/);
+  await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+  await expect(page.getByText('Recovery in progress')).toBeVisible();
+  expect(ordinarySessionRequests).toBe(0);
+
+  await page.goto('/map');
+  await expect(page).toHaveURL(/\/account\/recovery$/);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+  expect(ordinarySessionRequests).toBe(0);
+});
+
+test('player password replacement ends the recovery session and requires explicit sign-in', async ({
+  page,
+}) => {
+  await restorePlayerSession(page, 'recovery');
+  await page.route('**/auth/v1/user', async (route) => {
+    if (route.request().method() !== 'PUT') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(playerUser()),
+    });
+  });
+  await page.route('**/auth/v1/logout**', (route) => route.fulfill({ status: 204, body: '' }));
+
+  await page.getByLabel('New password', { exact: true }).fill('replacement-password');
+  await page.getByLabel('Confirm new password').fill('replacement-password');
+  await page.getByRole('button', { name: 'Update password' }).click();
+
+  await expect(
+    page.getByText('Your password has been updated. Sign in with your new password.'),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
+  await expect(page.getByText('Recovery in progress')).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('sb-127-auth-token')))
+    .toBeNull();
+});
+
+test('player can cancel recovery only by signing the recovery session out', async ({ page }) => {
+  await restorePlayerSession(page, 'recovery');
+  await page.route('**/auth/v1/logout**', (route) => route.fulfill({ status: 204, body: '' }));
+
+  await page
+    .getByRole('button', { name: 'Cancel recovery and sign out' })
+    .click({ timeout: 1_000 });
+
+  await expect(page).toHaveURL(/\/account\/sign-in$/);
+  await expect(page.getByRole('heading', { name: 'Sign in to your account.' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('sb-127-auth-token')))
+    .toBeNull();
+});
+
+test('ordinary signed-in sessions cannot use recovery as a password-change shortcut', async ({
+  page,
+}) => {
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: playerUserId,
+        email: 'player@example.test',
+        emailVerified: true,
+        sessionId: playerSessionId,
+        aal: 'aal1',
+      }),
+    }),
+  );
+  await restorePlayerSession(page, 'password');
+  await page.goto('/account/recovery');
+
+  await expect(page.getByRole('heading', { name: 'Recover your account.' })).toBeVisible();
+  await expect(page.getByLabel('New password')).toHaveCount(0);
+});
+
 test('operator MFA starts behind password authentication without registration', async ({
   page,
 }) => {
@@ -219,6 +380,29 @@ test('operator MFA starts behind password authentication without registration', 
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByText('Use at least 12 characters for your password.')).toBeVisible();
   await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
+});
+
+test('operator client rejects recovery sessions before entering the MFA flow', async ({ page }) => {
+  await useControlledAuth(page, 5174);
+  await page.route('**/auth/v1/user', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(operatorUser([])),
+    }),
+  );
+  await page.goto('http://127.0.0.1:5174');
+  await page.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: operatorRecoverySession() },
+  );
+  await page.reload();
+
+  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  await expect(
+    page.getByText('Password recovery sessions cannot access the operator workspace.'),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
 });
 
 test('operator MFA enrollment keeps its QR secret inside the enrollment step', async ({ page }) => {

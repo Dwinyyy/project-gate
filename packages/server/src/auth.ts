@@ -6,6 +6,7 @@ export interface AuthIdentity {
   emailVerified: boolean;
   sessionId: string | null;
   aal: 'aal1' | 'aal2';
+  accessMode: 'standard' | 'recovery';
 }
 
 export interface AuthVerifier {
@@ -25,6 +26,32 @@ interface AccessTokenClaims {
   exp: number;
   aal: 'aal1' | 'aal2';
   sessionId: string | null;
+  accessMode: 'standard' | 'recovery';
+}
+
+function authenticationMethods(amr: unknown): string[] | null {
+  if (!Array.isArray(amr) || amr.length === 0) return null;
+  if (amr.every((entry) => typeof entry === 'string')) {
+    const methods = amr as string[];
+    return methods.every((method) => method.length > 0 && method.length <= 64) ? methods : null;
+  }
+  if (
+    amr.every((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const record = entry as Record<string, unknown>;
+      return (
+        typeof record.method === 'string' &&
+        record.method.length > 0 &&
+        record.method.length <= 64 &&
+        typeof record.timestamp === 'number' &&
+        Number.isSafeInteger(record.timestamp) &&
+        record.timestamp >= 0
+      );
+    })
+  ) {
+    return (amr as Array<{ method: string }>).map((entry) => entry.method);
+  }
+  return null;
 }
 
 function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
@@ -42,6 +69,8 @@ function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
     )
       return null;
     if (claims.aal !== 'aal1' && claims.aal !== 'aal2') return null;
+    const methods = authenticationMethods(claims.amr);
+    if (!methods) return null;
     const sessionId = claims.session_id;
     if (sessionId !== undefined && (typeof sessionId !== 'string' || !uuidPattern.test(sessionId)))
       return null;
@@ -50,6 +79,7 @@ function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
       exp: claims.exp,
       aal: claims.aal,
       sessionId: sessionId ?? null,
+      accessMode: methods.includes('recovery') ? 'recovery' : 'standard',
     };
   } catch {
     return null;
@@ -92,6 +122,7 @@ export function createSupabaseAuthVerifier(options: SupabaseAuthVerifierOptions)
             typeof user.email_confirmed_at === 'string' && user.email_confirmed_at.length > 0,
           sessionId: claims.sessionId,
           aal: claims.aal,
+          accessMode: claims.accessMode,
         };
       } catch {
         return null;

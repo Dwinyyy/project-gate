@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getSystemStatus } from '@hunter-world/client';
 import { Icon, StatusBadge, SystemMark, type IconName } from '@hunter-world/ui';
@@ -8,6 +8,7 @@ import { AccountAccess } from './auth/AccountAccess';
 import { AccountControl } from './auth/AccountControl';
 import { AuthCallback } from './auth/AuthCallback';
 import { Recovery } from './auth/Recovery';
+import { useAccountAuth } from './auth/AuthProvider';
 
 const navigation: { path: string; label: string; icon: IconName }[] = [
   { path: '/', label: 'System', icon: 'system' },
@@ -319,6 +320,7 @@ function NotFoundScreen() {
 
 export function App() {
   const location = useLocation();
+  const { auth } = useAccountAuth();
   const mainRef = useRef<HTMLElement>(null);
   const previousPath = useRef(location.pathname);
   const currentTitle =
@@ -335,6 +337,10 @@ export function App() {
       previousPath.current = location.pathname;
     }
   }, [currentTitle, location.pathname]);
+
+  if (auth.phase === 'recovery' && location.pathname !== '/account/recovery') {
+    return <Navigate to="/account/recovery" replace />;
+  }
 
   return (
     <div className={styles.app}>

@@ -110,13 +110,14 @@ describe('foundation API trust boundaries', () => {
   });
 
   it('returns a server-validated self session without provider metadata', async () => {
-    const identity: AuthIdentity = {
+    const identity = {
       authUserId: '11111111-1111-4111-8111-111111111111',
       email: 'player@example.test',
       emailVerified: true,
       sessionId: '22222222-2222-4222-8222-222222222222',
       aal: 'aal1',
-    };
+      accessMode: 'standard' as const,
+    } satisfies AuthIdentity & { accessMode: 'standard' };
     const app = buildApp({
       logger: false,
       auth: {
@@ -136,7 +137,13 @@ describe('foundation API trust boundaries', () => {
       headers: { authorization: 'Bearer valid-session-token' },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(identity);
+    expect(response.json()).toEqual({
+      authUserId: identity.authUserId,
+      email: identity.email,
+      emailVerified: identity.emailVerified,
+      sessionId: identity.sessionId,
+      aal: identity.aal,
+    });
     expect(response.body).not.toMatch(/user_metadata|provider|refresh/i);
   });
 
@@ -184,6 +191,7 @@ describe('foundation API trust boundaries', () => {
             emailVerified: true,
             sessionId: '22222222-2222-4222-8222-222222222222',
             aal: 'aal1',
+            accessMode: 'standard' as const,
           }),
         },
       },
@@ -219,6 +227,7 @@ describe('foundation API trust boundaries', () => {
             emailVerified: true,
             sessionId: '22222222-2222-4222-8222-222222222222',
             aal: 'aal2',
+            accessMode: 'standard' as const,
           }),
         },
       },
@@ -250,6 +259,7 @@ describe('foundation API trust boundaries', () => {
             emailVerified: true,
             sessionId: '22222222-2222-4222-8222-222222222222',
             aal: 'aal2',
+            accessMode: 'standard' as const,
           }),
         },
       },
@@ -274,4 +284,49 @@ describe('foundation API trust boundaries', () => {
     });
     expect(response.body).not.toMatch(/email|sessionId|user_metadata|provider/i);
   });
+
+  it.each(['aal1', 'aal2'] as const)(
+    'denies %s recovery sessions before normal or operator authorization',
+    async (aal) => {
+      const authUserId = '11111111-1111-4111-8111-111111111111';
+      let operatorLookups = 0;
+      const recoveryIdentity = {
+        authUserId,
+        email: 'player@example.test',
+        emailVerified: true,
+        sessionId: '22222222-2222-4222-8222-222222222222',
+        aal,
+        accessMode: 'recovery' as const,
+      } satisfies AuthIdentity & { accessMode: 'recovery' };
+      const app = buildApp({
+        logger: false,
+        auth: {
+          publicConfig: {
+            supabaseUrl: 'https://project.supabase.co',
+            supabasePublishableKey: 'sb_publishable_example',
+          },
+          verifier: { verify: async () => recoveryIdentity },
+        },
+        operators: {
+          findActiveOperator: async () => {
+            operatorLookups += 1;
+            return { authUserId, permissions: ['feature_controls:read'] };
+          },
+        },
+      });
+      apps.push(app);
+
+      for (const url of ['/v1/auth/session', '/v1/operator/session']) {
+        const response = await app.inject({
+          url,
+          headers: { authorization: 'Bearer recovery-session-token' },
+        });
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toMatchObject({
+          error: { code: 'PASSWORD_UPDATE_REQUIRED' },
+        });
+      }
+      expect(operatorLookups).toBe(0);
+    },
+  );
 });
