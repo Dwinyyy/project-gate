@@ -57,10 +57,10 @@ function passwordSession(aal: 'aal1' | 'aal2', factors: TestFactor[]) {
   };
 }
 
-function operatorRecoverySession() {
+function operatorRecoverySession(method = 'recovery') {
   return {
     ...passwordSession('aal1', []),
-    access_token: accessToken('aal1', 'recovery'),
+    access_token: accessToken('aal1', method),
     refresh_token: 'fixture-operator-recovery-refresh',
   };
 }
@@ -82,7 +82,7 @@ function playerUser() {
   };
 }
 
-function playerSession(method: 'password' | 'recovery') {
+function playerSession(method: 'password' | 'recovery' | 'otp' | 'signup') {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
     sub: playerUserId,
@@ -117,7 +117,10 @@ async function useControlledAuth(page: Page, port = 5173) {
   );
 }
 
-async function restorePlayerSession(page: Page, method: 'password' | 'recovery') {
+async function restorePlayerSession(
+  page: Page,
+  method: 'password' | 'recovery' | 'otp' | 'signup',
+) {
   await useControlledAuth(page);
   await page.route('**/auth/v1/user', (route) =>
     route.fulfill({
@@ -273,6 +276,28 @@ test('player verification callback fails safely without a confirmed session', as
   await expect(page.getByRole('link', { name: 'Return to sign in' })).toBeVisible();
 });
 
+for (const method of ['otp', 'signup'] as const) {
+  test(`${method} email verification requires password sign-in before application access`, async ({
+    page,
+  }) => {
+    let ordinarySessionRequests = 0;
+    await page.route('**/v1/auth/session', (route) => {
+      ordinarySessionRequests += 1;
+      return route.fulfill({ status: 403, body: '{}' });
+    });
+    await restorePlayerSession(page, method);
+    await page.goto('/auth/callback');
+    await expect(page.getByRole('heading', { name: 'Account link confirmed.' })).toBeVisible();
+    await expect(
+      page.getByText('Your email link is confirmed. Sign in with your password to continue.'),
+    ).toBeVisible();
+    await page.getByRole('link', { name: 'Return to sign in' }).click();
+    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    await expect(page.getByText('Recovery in progress')).toHaveCount(0);
+    expect(ordinarySessionRequests).toBe(0);
+  });
+}
+
 test('player recovery session stays locked to password replacement across navigation and reload', async ({
   page,
 }) => {
@@ -320,15 +345,82 @@ test('player password replacement ends the recovery session and requires explici
   await page.getByLabel('Confirm new password').fill('replacement-password');
   await page.getByRole('button', { name: 'Update password' }).click();
 
+  await expect(page).toHaveURL(/\/account\/sign-in$/);
+  await expect(page.getByRole('heading', { name: 'Sign in to your account.' })).toBeVisible();
   await expect(
     page.getByText('Your password has been updated. Sign in with your new password.'),
   ).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Recovery in progress')).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('sb-127-auth-token')))
     .toBeNull();
+
+  await page.goBack();
+  await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
+  await page.goto('/account/recovery');
+  await expect(page.getByRole('heading', { name: 'Recover your account.' })).toBeVisible();
+  await expect(
+    page.getByText('Your password has been updated. Sign in with your new password.'),
+  ).toHaveCount(0);
 });
+
+for (const failure of ['password update', 'global sign-out'] as const) {
+  test(`failed ${failure} never grants application access or reports full success`, async ({
+    page,
+  }) => {
+    await restorePlayerSession(page, 'recovery');
+    await page.route('**/auth/v1/user', async (route) => {
+      if (route.request().method() !== 'PUT') {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: failure === 'password update' ? 500 : 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          failure === 'password update' ? { msg: 'Provider unavailable' } : playerUser(),
+        ),
+      });
+    });
+    await page.route('**/auth/v1/logout**', (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: '{"msg":"Provider unavailable"}',
+      }),
+    );
+
+    await page.getByLabel('New password', { exact: true }).fill('replacement-password');
+    await page.getByLabel('Confirm new password').fill('replacement-password');
+    await page.getByRole('button', { name: 'Update password' }).click();
+
+    await expect(page).toHaveURL(/\/account\/recovery$/);
+    await expect(
+      page.getByText('Your password has been updated. Sign in with your new password.'),
+    ).toHaveCount(0);
+    if (failure === 'password update') {
+      await expect(page.getByRole('button', { name: 'Update password' })).toBeEnabled();
+      await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+      await page.goto('/map');
+      await expect(page).toHaveURL(/\/account\/recovery$/);
+    } else {
+      // The SDK removes local credentials even if global revocation fails.
+      await expect(page.getByRole('heading', { name: 'Recover your account.' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Send recovery link' })).toBeEnabled();
+      await expect
+        .poll(() => page.evaluate(() => localStorage.getItem('sb-127-auth-token')))
+        .toBeNull();
+      await expect(
+        page.getByText(
+          'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
+        ),
+      ).toBeVisible();
+      await expect(page.getByRole('link', { name: 'Return to sign in' })).toBeVisible();
+    }
+  });
+}
 
 test('player can cancel recovery only by signing the recovery session out', async ({ page }) => {
   await restorePlayerSession(page, 'recovery');
@@ -382,28 +474,36 @@ test('operator MFA starts behind password authentication without registration', 
   await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
 });
 
-test('operator client rejects recovery sessions before entering the MFA flow', async ({ page }) => {
-  await useControlledAuth(page, 5174);
-  await page.route('**/auth/v1/user', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(operatorUser([])),
-    }),
-  );
-  await page.goto('http://127.0.0.1:5174');
-  await page.evaluate(
-    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
-    { storageKey: 'sb-127-auth-token', session: operatorRecoverySession() },
-  );
-  await page.reload();
+for (const method of ['recovery', 'otp']) {
+  test(`operator client rejects ${method} sessions before entering the MFA flow`, async ({
+    page,
+  }) => {
+    await useControlledAuth(page, 5174);
+    await page.route('**/auth/v1/user', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(operatorUser([])),
+      }),
+    );
+    await page.goto('http://127.0.0.1:5174');
+    await page.evaluate(
+      ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+      { storageKey: 'sb-127-auth-token', session: operatorRecoverySession(method) },
+    );
+    await page.reload();
 
-  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
-  await expect(
-    page.getByText('Password recovery sessions cannot access the operator workspace.'),
-  ).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
-});
+    await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+    await expect(
+      page.getByText(
+        method === 'recovery'
+          ? 'Password recovery sessions cannot access the operator workspace.'
+          : 'Sign in with your password before accessing the operator workspace.',
+      ),
+    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
+  });
+}
 
 test('operator MFA enrollment keeps its QR secret inside the enrollment step', async ({ page }) => {
   await useOperatorPasswordSession(page, []);

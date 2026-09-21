@@ -128,12 +128,15 @@ export function useOperatorAuth(): OperatorAuthModel {
       setError(null);
       return;
     }
-    if (authPhase === 'recovery') {
+    if (authPhase === 'recovery' || authPhase === 'restricted') {
       revision.current += 1;
       processedToken.current = null;
       setView({
         phase: 'denied',
-        message: 'Password recovery sessions cannot access the operator workspace.',
+        message:
+          authPhase === 'recovery'
+            ? 'Password recovery sessions cannot access the operator workspace.'
+            : 'Sign in with your password before accessing the operator workspace.',
       });
       setError(null);
       return;

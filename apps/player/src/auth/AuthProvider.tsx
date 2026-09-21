@@ -109,7 +109,7 @@ function ConnectedAccountProvider({
 
   useEffect(() => {
     let active = true;
-    if (!auth.accessToken || auth.phase === 'recovery') {
+    if (!auth.accessToken || auth.phase !== 'authenticated') {
       setValidated({ token: null, session: null, error: null });
       return () => {
         active = false;
@@ -147,7 +147,7 @@ function ConnectedAccountProvider({
   }, [auth.accessToken, auth.phase, auth.user?.id]);
 
   const validation =
-    !auth.accessToken || auth.phase === 'recovery'
+    !auth.accessToken || auth.phase !== 'authenticated'
       ? 'none'
       : validated.token !== auth.accessToken || (!validated.session && !validated.error)
         ? 'checking'

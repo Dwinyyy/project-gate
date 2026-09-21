@@ -31,7 +31,10 @@ function bearerToken(authorization: string | undefined): string | null {
 }
 
 type StandardIdentityResult =
-  { kind: 'invalid' } | { kind: 'recovery' } | { kind: 'standard'; identity: AuthIdentity };
+  | { kind: 'invalid' }
+  | { kind: 'recovery' }
+  | { kind: 'restricted' }
+  | { kind: 'standard'; identity: AuthIdentity };
 
 async function verifyStandardIdentity(
   authorization: string | undefined,
@@ -42,6 +45,7 @@ async function verifyStandardIdentity(
   const identity = await verifier.verify(token);
   if (!identity) return { kind: 'invalid' };
   if (identity.accessMode === 'recovery') return { kind: 'recovery' };
+  if (identity.accessMode !== 'standard') return { kind: 'restricted' };
   return { kind: 'standard', identity };
 }
 
@@ -144,6 +148,11 @@ export function buildApp(options: ApiOptions = {}) {
           .code(403)
           .send({ error: { code: 'PASSWORD_UPDATE_REQUIRED', requestId: request.id } });
       }
+      if (verified.kind === 'restricted') {
+        return reply
+          .code(403)
+          .send({ error: { code: 'PASSWORD_SIGN_IN_REQUIRED', requestId: request.id } });
+      }
       const identity = verified.identity;
       const session: SelfSession = {
         authUserId: identity.authUserId,
@@ -187,6 +196,11 @@ export function buildApp(options: ApiOptions = {}) {
         return reply
           .code(403)
           .send({ error: { code: 'PASSWORD_UPDATE_REQUIRED', requestId: request.id } });
+      }
+      if (verified.kind === 'restricted') {
+        return reply
+          .code(403)
+          .send({ error: { code: 'PASSWORD_SIGN_IN_REQUIRED', requestId: request.id } });
       }
       const identity = verified.identity;
       const operator = await options.operators.findActiveOperator(identity.authUserId);

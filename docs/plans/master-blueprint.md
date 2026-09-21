@@ -44,6 +44,8 @@ No production code, infrastructure, or repository files are created in this plan
 
 Hunter World is a modern fictional hunter society overlaid on real geography. The player’s phone is their System interface, identification card, map, communications terminal, and access point to encounters.
 
+The player interface is mobile-first: phones fill the viewport, while desktop previews retain the same app layout in a centered portrait canvas. Use a compact header, persistent bottom navigation, touch targets of at least 44 CSS pixels, safe-area padding, and an internally scrolling screen that keeps account forms reachable in reduced viewports. The separate operator console remains designed for desktop. This presentation direction preserves the planned native spike and Phase 16 packaging and real-device acceptance; a browser preview does not establish native readiness or playable gameplay.
+
 The player inhabits one living character whose accomplishments, relationships, property, discoveries, and consequences persist. That character may become a hunter, healer, craftsperson, merchant, guild organizer, investigator, or eventually public official.
 
 Combat opens an illustrated tactical environment. It does not require a camera, augmented reality, continuous physical movement, or a real-time action-game engine.
@@ -1967,5 +1969,4 @@ Execute these in order:
 
 10. **2.3 — Implement transactional character creation.**  
     Verify concurrent creation, cooldown denial, unawakened start, and reliable retrieval of the resulting identity.
-
 

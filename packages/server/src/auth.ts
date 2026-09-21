@@ -6,7 +6,7 @@ export interface AuthIdentity {
   emailVerified: boolean;
   sessionId: string | null;
   aal: 'aal1' | 'aal2';
-  accessMode: 'standard' | 'recovery';
+  accessMode: 'standard' | 'recovery' | 'restricted';
 }
 
 export interface AuthVerifier {
@@ -26,7 +26,7 @@ interface AccessTokenClaims {
   exp: number;
   aal: 'aal1' | 'aal2';
   sessionId: string | null;
-  accessMode: 'standard' | 'recovery';
+  accessMode: AuthIdentity['accessMode'];
 }
 
 function authenticationMethods(amr: unknown): string[] | null {
@@ -79,7 +79,13 @@ function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
       exp: claims.exp,
       aal: claims.aal,
       sessionId: sessionId ?? null,
-      accessMode: methods.includes('recovery') ? 'recovery' : 'standard',
+      // Email verification can issue OTP AMR even for recovery links. Only a
+      // password-authenticated session may enter ordinary application routes.
+      accessMode: methods.includes('recovery')
+        ? 'recovery'
+        : methods.includes('password')
+          ? 'standard'
+          : 'restricted',
     };
   } catch {
     return null;

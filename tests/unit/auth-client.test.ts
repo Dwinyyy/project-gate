@@ -8,6 +8,7 @@ import {
   getSelfSession,
   type AuthBackend,
   type AuthBackendEvent,
+  type AuthBackendResult,
   type AuthBackendSession,
 } from '../../packages/client/src/auth.js';
 
@@ -20,11 +21,9 @@ function accessToken(amr: unknown): string {
 
 function session(
   accessToken: string,
-  accessMode: 'standard' | 'recovery' = 'standard',
+  accessMode: 'standard' | 'recovery' | 'restricted' = 'standard',
 ): AuthBackendSession {
-  return { accessToken, user, accessMode } as AuthBackendSession & {
-    accessMode: 'standard' | 'recovery';
-  };
+  return { accessToken, user, accessMode };
 }
 
 class MemoryAuthBackend implements AuthBackend {
@@ -68,7 +67,7 @@ class MemoryAuthBackend implements AuthBackend {
     return { data: this.currentSession, error: null };
   }
 
-  async signOut(scope: 'global' | 'others') {
+  async signOut(scope: 'global' | 'others'): Promise<AuthBackendResult<void>> {
     this.signOutScopes.push(scope);
     if (scope === 'global') this.currentSession = null;
     return { data: undefined, error: null };
@@ -194,6 +193,26 @@ describe('browser Auth controller', () => {
     expect(backend.signOutScopes).toEqual(['global']);
   });
 
+  it.each([false, true])(
+    'reports a changed password honestly when global sign-out fails (local cleared: %s)',
+    async (cleared) => {
+      const backend = new MemoryAuthBackend();
+      backend.currentSession = session('recovery-token', 'recovery');
+      backend.signOut = async () => {
+        if (cleared) backend.emit('SIGNED_OUT', null);
+        return { data: undefined, error: { message: 'private provider detail' } };
+      };
+      const controller = createAuthControllerForBackend(backend);
+      await controller.ready();
+      await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+        code: 'sign_out_incomplete',
+        message:
+          'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
+      });
+      expect(controller.getSnapshot().phase).toBe(cleared ? 'anonymous' : 'recovery');
+    },
+  );
+
   it('reconstructs recovery mode during initialization and token refresh', async () => {
     const backend = new MemoryAuthBackend();
     backend.currentSession = session('stored-recovery-token', 'recovery');
@@ -254,6 +273,28 @@ describe('browser Auth controller', () => {
     });
   });
 
+  it('requires password sign-in after email-only verification before MFA or application access', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('email-only-token', 'restricted');
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+    expect(controller.getSnapshot().phase).toBe('restricted');
+    await expect(controller.getMfaStatus()).rejects.toMatchObject({
+      code: 'password_sign_in_required',
+    });
+    await expect(controller.enrollTotp()).rejects.toMatchObject({
+      code: 'password_sign_in_required',
+    });
+    await expect(controller.verifyTotp('factor-1', '123456')).rejects.toMatchObject({
+      code: 'password_sign_in_required',
+    });
+    await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'recovery_required',
+    });
+    await controller.signIn('player@example.test', 'long-enough-password');
+    expect(controller.getSnapshot().phase).toBe('authenticated');
+  });
+
   it('reports unenrolled, challenge-required, and aal2 MFA states', async () => {
     const backend = new MemoryAuthBackend();
     backend.currentSession = session('aal1-token');
@@ -312,6 +353,12 @@ describe('browser Auth token boundary', () => {
       'recovery',
     ],
     ['RFC string recovery AMR', ['token_refresh', 'recovery'], 'recovery'],
+    ['email OTP verification', ['otp'], 'restricted'],
+    ['magic link with MFA', ['totp', 'magiclink'], 'restricted'],
+    ['signup link', ['signup'], 'restricted'],
+    ['unknown method', ['future_method'], 'restricted'],
+    ['password with MFA', ['totp', 'password'], 'standard'],
+    ['password with recovery', ['password', 'recovery'], 'recovery'],
   ] as const)('derives %s safely', (_label, amr, expected) => {
     expect(authAccessModeFromToken(accessToken(amr))).toBe(expected);
   });

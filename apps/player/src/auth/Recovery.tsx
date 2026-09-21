@@ -38,7 +38,7 @@ export function Recovery() {
         await controller.updatePassword(password);
         setPassword('');
         setConfirmation('');
-        setNotice('Your password has been updated. Sign in with your new password.');
+        navigate('/account/sign-in', { replace: true, state: { notice: 'password-updated' } });
       } else {
         await controller.requestPasswordRecovery(
           email,

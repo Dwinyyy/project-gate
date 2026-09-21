@@ -7,12 +7,15 @@ export function AuthCallback() {
   const { auth } = useAccountAuth();
   const loading = auth.phase === 'initializing';
   const recovering = auth.phase === 'recovery';
+  const passwordRequired = auth.phase === 'restricted';
   const confirmed = auth.phase === 'authenticated';
   return (
     <section className={styles.accountPanel} aria-labelledby="callback-title">
       <div className={styles.accountIcon} aria-hidden="true">
         <Icon
-          name={confirmed || recovering ? 'shield' : loading ? 'refresh' : 'lock'}
+          name={
+            confirmed || recovering || passwordRequired ? 'shield' : loading ? 'refresh' : 'lock'
+          }
           width="30"
           height="30"
         />
@@ -23,7 +26,7 @@ export function AuthCallback() {
           ? 'Confirming your account link…'
           : recovering
             ? 'Password recovery link confirmed.'
-            : confirmed
+            : confirmed || passwordRequired
               ? 'Account link confirmed.'
               : 'This account link could not be confirmed.'}
       </h1>
@@ -32,9 +35,11 @@ export function AuthCallback() {
           ? 'The System is checking this time-limited link.'
           : recovering
             ? 'Choose a new password before this account can access the System.'
-            : confirmed
-              ? 'Your account session is ready for server validation.'
-              : 'The link may have expired or already been used. Request a new link and try again.'}
+            : passwordRequired
+              ? 'Your email link is confirmed. Sign in with your password to continue.'
+              : confirmed
+                ? 'Your account session is ready for server validation.'
+                : 'The link may have expired or already been used. Request a new link and try again.'}
       </p>
       {!loading ? (
         <Link

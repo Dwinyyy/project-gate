@@ -11,7 +11,7 @@ export function AccountControl() {
   if (auth.phase === 'initializing') {
     return <span className={styles.accountState}>Account loading…</span>;
   }
-  if (auth.phase === 'anonymous' || auth.phase === 'unavailable') {
+  if (auth.phase === 'anonymous' || auth.phase === 'unavailable' || auth.phase === 'restricted') {
     return (
       <Link className={styles.accountLink} to="/account/sign-in">
         <Icon name="lock" width="15" height="15" />

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthActionError } from '@hunter-world/client';
 import { Icon } from '@hunter-world/ui';
 import { useAccountAuth } from './AuthProvider';
@@ -14,12 +14,20 @@ function safeMessage(error: unknown): string {
 export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
   const { controller, auth } = useAccountAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const routeState: unknown = location.state;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const registering = mode === 'register';
+  const passwordUpdated =
+    !registering &&
+    routeState !== null &&
+    typeof routeState === 'object' &&
+    'notice' in routeState &&
+    routeState.notice === 'password-updated';
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -61,6 +69,11 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
           ? 'Account access comes first. Your in-world character will be created separately when identity registration opens.'
           : 'Sign in to retrieve your confirmed account session. Character access is not enabled yet.'}
       </p>
+      {passwordUpdated ? (
+        <p className={styles.formSuccess} role="status">
+          Your password has been updated. Sign in with your new password.
+        </p>
+      ) : null}
       <form className={styles.accountForm} onSubmit={submit} noValidate>
         <label htmlFor="account-email">Email address</label>
         <input

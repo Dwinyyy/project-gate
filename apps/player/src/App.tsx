@@ -333,7 +333,7 @@ export function App() {
     document.title = `${currentTitle} · Hunter World`;
     if (previousPath.current !== location.pathname) {
       mainRef.current?.focus({ preventScroll: true });
-      window.scrollTo(0, 0);
+      mainRef.current?.scrollTo(0, 0);
       previousPath.current = location.pathname;
     }
   }, [currentTitle, location.pathname]);
@@ -343,60 +343,21 @@ export function App() {
   }
 
   return (
-    <div className={styles.app}>
-      <a className="hw-skip-link" href="#main-content">
-        Skip to content
-      </a>
-      <aside className={styles.sidebar}>
-        <Link to="/" className={styles.brand} aria-label="Hunter World System home">
-          <SystemMark />
-          <span>
-            HUNTER<span>WORLD</span>
-          </span>
-        </Link>
-        <p className={styles.navLabel}>SYSTEM INTERFACE</p>
-        <nav className={styles.navigation} aria-label="Main navigation">
-          {navigation.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              end={item.path === '/'}
-              className={({ isActive }) =>
-                `${styles.navItem} ${isActive ? styles.navItemActive : ''}`
-              }
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        <div className={styles.sidebarFooter}>
-          <span className={styles.foundationSymbol}>◇</span>
-          <p>
-            THE WORLD IS TAKING SHAPE<span>Foundation release</span>
-          </p>
-        </div>
-      </aside>
-      <div className={styles.mainColumn}>
+    <div className={styles.previewStage}>
+      <p className={styles.previewCaption}>MOBILE APP PREVIEW · FOUNDATION</p>
+      <div className={styles.app}>
+        <a className={`hw-skip-link ${styles.skipLink}`} href="#main-content">
+          Skip to content
+        </a>
         <header className={styles.topbar}>
-          <div className={styles.breadcrumb}>
-            <span>SYSTEM</span>
-            <span>/</span>
-            <span>{currentTitle}</span>
-          </div>
-          <Link to="/" className={styles.mobileBrand} aria-label="Hunter World System home">
+          <Link to="/" className={styles.brand} aria-label="Hunter World System home">
             <SystemMark />
-            <span>HUNTER WORLD</span>
+            <span>
+              HUNTER WORLD
+              <span className={styles.currentScreen}>{currentTitle}</span>
+            </span>
           </Link>
           <div className={styles.headerActions}>
-            <NavLink to="/body" aria-label="Open body status">
-              <Icon name="body" />
-              <span>Body status</span>
-            </NavLink>
-            <NavLink to="/identity" aria-label="Open System ID">
-              <Icon name="identity" />
-              <span>System ID</span>
-            </NavLink>
             <AccountControl />
           </div>
         </header>
@@ -417,6 +378,21 @@ export function App() {
             <span>A world to live in. A story to make your own.</span>
           </footer>
         </main>
+        <nav className={styles.navigation} aria-label="Main navigation">
+          {navigation.map((item) => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              end={item.path === '/'}
+              className={({ isActive }) =>
+                `${styles.navItem} ${isActive ? styles.navItemActive : ''}`
+              }
+            >
+              <Icon name={item.icon} />
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
       </div>
     </div>
   );

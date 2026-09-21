@@ -11,6 +11,8 @@ export type AuthProblem =
   | 'unauthenticated'
   | 'recovery_required'
   | 'password_update_required'
+  | 'password_sign_in_required'
+  | 'sign_out_incomplete'
   | 'mfa_required'
   | 'operator_access_denied'
   | 'unavailable';
@@ -33,7 +35,7 @@ export interface AuthBackendUser {
 export interface AuthBackendSession {
   accessToken: string;
   user: AuthBackendUser;
-  accessMode: 'standard' | 'recovery';
+  accessMode: 'standard' | 'recovery' | 'restricted';
 }
 
 export type AuthBackendEvent =
@@ -103,7 +105,7 @@ export interface AuthBackend {
 }
 
 export interface AuthSnapshot {
-  phase: 'initializing' | 'anonymous' | 'authenticated' | 'recovery' | 'unavailable';
+  phase: 'initializing' | 'anonymous' | 'authenticated' | 'recovery' | 'restricted' | 'unavailable';
   user: AuthBackendUser | null;
   accessToken: string | null;
   error: string | null;
@@ -223,7 +225,11 @@ export function authAccessModeFromToken(
   const payload = decodeJwtPayload(accessToken);
   const methods = payload ? authenticationMethods(payload.amr) : null;
   if (!methods) return null;
-  return methods.includes('recovery') ? 'recovery' : 'standard';
+  return methods.includes('recovery')
+    ? 'recovery'
+    : methods.includes('password')
+      ? 'standard'
+      : 'restricted';
 }
 
 function snapshotForSession(
@@ -232,7 +238,12 @@ function snapshotForSession(
 ): AuthSnapshot {
   return session
     ? {
-        phase: forceRecovery || session.accessMode === 'recovery' ? 'recovery' : 'authenticated',
+        phase:
+          forceRecovery || session.accessMode === 'recovery'
+            ? 'recovery'
+            : session.accessMode === 'standard'
+              ? 'authenticated'
+              : 'restricted',
         user: session.user,
         accessToken: session.accessToken,
         error: null,
@@ -331,10 +342,21 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       const updated = await backend.updatePassword(password);
       if (updated.error) throw actionError(updated.error);
       const signedOut = await backend.signOut('global');
-      if (signedOut.error) throw actionError(signedOut.error);
+      if (signedOut.error) {
+        throw new AuthActionError(
+          'sign_out_incomplete',
+          'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
+        );
+      }
       publish(snapshotForSession(null));
     },
     async getMfaStatus() {
+      if (snapshot.phase === 'restricted') {
+        throw new AuthActionError(
+          'password_sign_in_required',
+          'Sign in with your password before using an authenticator.',
+        );
+      }
       if (snapshot.phase === 'recovery') {
         throw new AuthActionError(
           'password_update_required',
@@ -353,6 +375,12 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       };
     },
     async enrollTotp() {
+      if (snapshot.phase === 'restricted') {
+        throw new AuthActionError(
+          'password_sign_in_required',
+          'Sign in with your password before using an authenticator.',
+        );
+      }
       if (snapshot.phase === 'recovery') {
         throw new AuthActionError(
           'password_update_required',
@@ -368,6 +396,12 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       };
     },
     async verifyTotp(factorId, code) {
+      if (snapshot.phase === 'restricted') {
+        throw new AuthActionError(
+          'password_sign_in_required',
+          'Sign in with your password before using an authenticator.',
+        );
+      }
       if (snapshot.phase === 'recovery') {
         throw new AuthActionError(
           'password_update_required',
@@ -608,6 +642,12 @@ async function sessionRequest(
         throw new AuthActionError(
           'password_update_required',
           'Complete password recovery and sign in again to continue.',
+        );
+      }
+      if (code === 'PASSWORD_SIGN_IN_REQUIRED') {
+        throw new AuthActionError(
+          'password_sign_in_required',
+          'Sign in with your password to continue.',
         );
       }
       if (response.status === 401) {

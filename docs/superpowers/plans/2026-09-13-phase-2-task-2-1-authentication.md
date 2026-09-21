@@ -245,7 +245,7 @@ Expected: failure because `createBrowserAuthController` does not exist.
 
 ```ts
 export interface AuthSnapshot {
-  phase: 'initializing' | 'anonymous' | 'authenticated' | 'recovery' | 'unavailable';
+  phase: 'initializing' | 'anonymous' | 'authenticated' | 'recovery' | 'restricted' | 'unavailable';
   user: { id: string; email: string | null } | null;
   accessToken: string | null;
   error: string | null;
@@ -324,7 +324,11 @@ Initialize once, subscribe with `useSyncExternalStore`, dispose on unmount, disa
 
 - [x] **Step 4: Add verification and recovery callback behavior**
 
-The callback waits for PKCE/session processing and offers a safe retry path. The recovery page accepts a new 12-character password only while the controller is in recovery state. Recovery mode is reconstructed from the JWT `amr` claim across initial load and refresh, locks navigation to the recovery page, cannot enter operator MFA, and is rejected by ordinary authenticated API routes. Successful password replacement signs out globally and requires an explicit sign-in with the new password.
+The callback waits for PKCE/session processing and offers a safe retry path. The recovery page accepts a new 12-character password only while the controller is in recovery state. Recovery mode is reconstructed from the JWT `amr` claim across initial load and refresh, locks navigation to the recovery page, cannot enter operator MFA, and is rejected by ordinary authenticated API routes. Only password-authenticated tokens without recovery AMR can enter ordinary application routes; OTP/signup/magic-link sessions must sign in explicitly, even after MFA. This closes alternate provider recovery exchanges that use OTP AMR. Successful password replacement signs out globally, replaces the recovery route with sign-in, and displays “Your password has been updated. Sign in with your new password.” there. Failed global sign-out after a successful replacement reports partial success without claiming revocation succeeded.
+
+- [ ] **Acceptance follow-up: MFA-enabled account recovery**
+
+Add and verify recovery-specific TOTP step-up for accounts already enrolled in MFA; Supabase requires AAL2 for their password update. Preserve recovery restrictions after the challenge and never expose operator enrollment/authorization through this flow. This pre-existing functional gap remains outstanding; it does not block the password-only recovery/UI remediation but prevents Task 2.1 acceptance.
 
 - [x] **Step 5: Add signed-in and sign-out states**
 
