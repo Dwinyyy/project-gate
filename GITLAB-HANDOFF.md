@@ -98,6 +98,22 @@ Do not stop merely because the first implementation appears plausible.
 
 Continue until the original goal and its completion conditions are actually satisfied.
 
+## Checkpoint Policy
+
+After each meaningful verified stage, create a small logical Git commit before proceeding.
+
+Do not wait until the entire goal is complete before committing.
+
+Examples:
+- baseline verification documented
+- stale-event regression fixed and tested
+- recovery/session review findings closed
+- operator retry behavior fixed
+- security verification completed
+- final local verification completed
+
+This ensures work can be safely recovered if the headless workflow is interrupted.
+
 ## Completion
 
 Before declaring the goal complete:
