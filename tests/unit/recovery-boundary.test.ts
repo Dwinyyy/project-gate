@@ -48,8 +48,10 @@ function methods(...names: string[]): Array<{ method: string; timestamp: number 
   }));
 }
 
-function fixture() {
+function fixture(options: { factors?: Array<{ factor_type: string; status: string }> } = {}) {
   let sessionActive = true;
+  // Operator sessions require a current verified TOTP factor on the provider record (ADR 0010).
+  const factors = options.factors ?? [{ factor_type: 'totp', status: 'verified' }];
   // Controlled provider boundary, not a live Supabase emulator. Its signature check
   // ensures the actual verifier forwards exactly the token supplied to the API.
   const providerFetch = vi.fn<typeof fetch>(async (input, init) => {
@@ -94,6 +96,7 @@ function fixture() {
         id: authUserId,
         email: 'fixture@example.test',
         email_confirmed_at: '2026-09-13T12:00:00.000Z',
+        factors,
         user_metadata: {
           accessMode: 'standard',
           amr: ['password'],
@@ -260,10 +263,37 @@ describe('recovery boundary through the real verifier and API routes', () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ authUserId, aal: 'aal2' });
     }
-    expect(operatorLookup).toHaveBeenCalledTimes(1);
+    // Both routes consult the live assignment: self-session derives applicationRole from it.
+    expect(operatorLookup).toHaveBeenCalledTimes(2);
     revokeSession();
     await expectDenied(app, token, 401);
     expect(providerFetch).toHaveBeenCalledTimes(4);
-    expect(operatorLookup).toHaveBeenCalledTimes(1);
+    expect(operatorLookup).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ['no factors', []],
+    ['an unverified TOTP factor', [{ factor_type: 'totp', status: 'unverified' }]],
+    ['only a non-TOTP factor', [{ factor_type: 'phone', status: 'verified' }]],
+  ])(
+    'denies operator access to a signed AAL2 TOTP token when the provider reports %s',
+    async (_label, factors) => {
+      const { app, operatorLookup } = fixture({ factors });
+      const token = signedToken(claims({ aal: 'aal2', amr: methods('totp', 'password') }));
+      const player = await app.inject({
+        url: '/v1/auth/session',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(player.statusCode).toBe(200);
+      expect(player.json()).toMatchObject({ applicationRole: 'operator' });
+      const operator = await app.inject({
+        url: '/v1/operator/session',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(operator.statusCode).toBe(403);
+      expect(operator.json()).toMatchObject({ error: { code: 'MFA_REQUIRED' } });
+      expect(operator.json()).not.toHaveProperty('permissions');
+      expect(operatorLookup).toHaveBeenCalledTimes(2);
+    },
+  );
 });

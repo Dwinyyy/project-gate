@@ -11,7 +11,7 @@ function assertEntries(output: string) {
   const operatorHtml = readFileSync(join(output, 'operator', 'index.html'), 'utf8');
   expect(playerHtml).toContain('Hunter World');
   expect(operatorHtml).toContain('Operator · Hunter World');
-  for (const asset of operatorHtml.matchAll(/(?:src|href)="(\/operator\/assets\/[^\"]+)"/g)) {
+  for (const asset of operatorHtml.matchAll(/(?:src|href)="(\/operator\/assets\/[^"]+)"/g)) {
     expect(existsSync(join(output, asset[1]!.slice(1)))).toBe(true);
   }
   expect(operatorHtml).toMatch(/\/operator\/assets\/[^" ]+\.js/);

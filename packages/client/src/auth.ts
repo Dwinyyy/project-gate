@@ -437,13 +437,30 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       }
       const signedOut = bound ? await bound.signOut() : await backend.signOut('global');
       if (signedOut.error) {
+        if (bound) {
+          // Match provider behavior: local recovery credentials are removed even when global
+          // revocation fails, but only while this tab still stores the originating session.
+          try {
+            if (await bound.clear()) publishSession(null);
+          } catch {
+            // The honest partial-failure report below still applies.
+          }
+        }
         throw new AuthActionError(
           'sign_out_incomplete',
           'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
         );
       }
       if (bound) {
-        if (!(await bound.clear())) throw recoveryChanged();
+        if (!(await bound.clear())) {
+          // Another sign-in replaced the originating recovery session. Never sign it out.
+          throw new AuthActionError(
+            'recovery_required',
+            'Your password was updated and recovery sessions were signed out, but another account is now active in this browser. Sign in with your new password when you need it.',
+          );
+        }
+        // Publish the committed storage state now; the deferred reconciliation only confirms it.
+        publishSession(null);
       } else {
         publishSession(null);
       }
@@ -486,8 +503,12 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
         throw recoveryChanged();
       }
       if (nextSession.accessMode !== 'recovery') {
-        if (bound) await bound.clear();
-        else {
+        if (bound) {
+          // The bound client revokes only the originating account; storage is cleared only
+          // while it still holds that exact session.
+          await bound.signOut();
+          if (await bound.clear()) publishSession(null);
+        } else {
           await backend.signOut('global');
           publishSession(null);
         }
@@ -497,7 +518,10 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
         );
       }
       if (bound) {
-        if (!(await bound.promote())) throw recoveryChanged();
+        const promoted = await bound.promote();
+        if (!promoted) throw recoveryChanged();
+        // Publish the committed storage state now; the deferred reconciliation only confirms it.
+        publishSession(promoted, true);
       } else publishSession(nextSession, true);
     },
     async getMfaStatus() {
@@ -577,9 +601,11 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
         : null;
       const nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
       if (bound) {
-        if (!(await bound.promote())) {
+        const promoted = await bound.promote();
+        if (!promoted) {
           throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
         }
+        publishSession(promoted);
       } else if (
         snapshot.user?.id === origin.user?.id &&
         snapshot.accessToken === origin.accessToken

@@ -10,6 +10,7 @@ import {
   type AuthBackendEvent,
   type AuthBackendResult,
   type AuthBackendSession,
+  type BoundAuthSession,
 } from '../../packages/client/src/auth.js';
 
 const user = { id: '11111111-1111-4111-8111-111111111111', email: 'player@example.test' };
@@ -22,7 +23,7 @@ function accessToken(amr: unknown): string {
 function session(
   accessToken: string,
   accessMode: 'standard' | 'recovery' | 'restricted' = 'standard',
-  sessionUser = user,
+  sessionUser: AuthBackendSession['user'] = user,
 ): AuthBackendSession {
   return { accessToken, user: sessionUser, accessMode };
 }
@@ -559,6 +560,172 @@ describe('browser Auth controller', () => {
     await expect(controller.signIn('player@example.test', 'long-enough-password')).rejects.toEqual(
       new AuthActionError('invalid_credentials', 'The email or password is incorrect.'),
     );
+  });
+});
+
+// Mirrors BrowserSessionStore: operations run on a private session bound to the originating
+// stored session, and commits are compare-and-swap against the exact stored session. Commits
+// deliberately emit no synchronous event, like the browser's deferred reconciliation.
+class BoundMemoryBackend extends MemoryAuthBackend {
+  readonly boundSignOuts: string[] = [];
+  boundSignOutError: AuthBackendResult<void>['error'] = null;
+  beforeClear: (() => void) | null = null;
+  verification: Promise<void> | null = null;
+
+  async beginBoundSession(expected: AuthBackendSession): Promise<BoundAuthSession> {
+    const origin = this.currentSession;
+    if (origin?.accessToken !== expected.accessToken) {
+      throw new AuthActionError('unauthenticated', 'The account changed.');
+    }
+    let privateSession: AuthBackendSession = origin;
+    const commit = (next: AuthBackendSession | null) => {
+      if (this.currentSession !== origin) return false;
+      this.currentSession = next;
+      return true;
+    };
+    return {
+      isCurrent: async () => this.currentSession === origin,
+      getMfaState: () => this.getMfaState(),
+      enrollTotp: () => this.enrollTotp(),
+      verifyTotp: async (input) => {
+        await this.verification;
+        if (input.code !== '123456') {
+          return { data: null, error: { code: 'invalid_mfa_code', message: 'invalid' } };
+        }
+        this.assurance = 'aal2';
+        privateSession = session('bound-aal2-token', origin.accessMode, origin.user);
+        return { data: privateSession, error: null };
+      },
+      updatePassword: (password) => this.updatePassword(password),
+      signOut: async () => {
+        this.boundSignOuts.push(privateSession.user.id);
+        return { data: undefined, error: this.boundSignOutError };
+      },
+      promote: async () => (commit(privateSession) ? privateSession : null),
+      clear: async () => {
+        this.beforeClear?.();
+        return commit(null);
+      },
+    };
+  }
+}
+
+describe('browser Auth controller with session-bound operations', () => {
+  const replacementUser = {
+    id: '22222222-2222-4222-8222-222222222222',
+    email: 'replacement@example.test',
+  };
+
+  it('publishes the cleared recovery session as soon as password replacement commits', async () => {
+    const backend = new BoundMemoryBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await controller.updatePassword('replacement-password');
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'anonymous', accessToken: null });
+    expect(backend.currentSession).toBeNull();
+    expect(backend.boundSignOuts).toEqual([user.id]);
+    expect(backend.signOutScopes).toEqual([]);
+  });
+
+  it('removes only the originating recovery session when global sign-out fails', async () => {
+    const backend = new BoundMemoryBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    backend.boundSignOutError = { message: 'private provider detail', status: 500 };
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'sign_out_incomplete',
+    });
+    expect(backend.currentSession).toBeNull();
+    expect(controller.getSnapshot().phase).toBe('anonymous');
+  });
+
+  it('keeps a newer account when global sign-out fails after another sign-in', async () => {
+    const backend = new BoundMemoryBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    backend.boundSignOutError = { message: 'private provider detail', status: 500 };
+    backend.beforeClear = () => backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'sign_out_incomplete',
+    });
+    expect(backend.currentSession).toMatchObject({ accessToken: 'standard-b' });
+    expect(backend.signOutScopes).toEqual([]);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+      accessToken: 'standard-b',
+    });
+  });
+
+  it('never clears or reports success over a newer account after password replacement', async () => {
+    const backend = new BoundMemoryBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    backend.beforeClear = () => backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'recovery_required',
+      message: expect.stringContaining('Your password was updated'),
+    });
+    expect(backend.boundSignOuts).toEqual([user.id]);
+    expect(backend.signOutScopes).toEqual([]);
+    expect(backend.currentSession).toMatchObject({ accessToken: 'standard-b' });
+    expect(controller.getSnapshot()).toMatchObject({ phase: 'authenticated', user: replacementUser });
+  });
+
+  it('publishes the promoted recovery AAL2 session immediately after verification', async () => {
+    const backend = new BoundMemoryBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    backend.verifiedFactorIds = ['factor-1'];
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await controller.verifyRecoveryTotp('factor-1', '123456');
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'recovery',
+      accessToken: 'bound-aal2-token',
+    });
+    expect(backend.currentSession).toMatchObject({ accessToken: 'bound-aal2-token' });
+  });
+
+  it('publishes a promoted operator AAL2 session immediately and refuses to replace a newer login', async () => {
+    const backend = new BoundMemoryBackend();
+    backend.currentSession = session('aal1-a');
+    backend.verifiedFactorIds = ['factor-1'];
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await controller.verifyTotp('factor-1', '123456');
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      accessToken: 'bound-aal2-token',
+    });
+
+    const raced = new BoundMemoryBackend();
+    raced.currentSession = session('aal1-a');
+    raced.verifiedFactorIds = ['factor-1'];
+    const release = deferred<void>();
+    raced.verification = release.promise;
+    const racedController = createAuthControllerForBackend(raced);
+    await racedController.ready();
+    const pending = racedController.verifyTotp('factor-1', '123456');
+    await Promise.resolve();
+    raced.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    release.resolve();
+    await expect(pending).rejects.toMatchObject({ code: 'unauthenticated' });
+    expect(raced.currentSession).toMatchObject({ accessToken: 'standard-b' });
+    expect(racedController.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+      accessToken: 'standard-b',
+    });
   });
 });
 

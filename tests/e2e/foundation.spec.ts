@@ -326,7 +326,9 @@ for (const recovery of [false, true]) {
     await context.route('**/__auth-concurrency-test', (route) => route.fulfill({
       status: 200, contentType: 'text/html', body: '<!doctype html><body>Test login client</body>',
     }));
-    await page.goto('/account/sign-in');
+    // Seed from an inert same-origin page: a loaded player app would legitimately route the
+    // operator session to /operator/ itself and race this navigation.
+    await page.goto('/__auth-concurrency-test');
     await page.evaluate((session) => localStorage.setItem('sb-127-auth-token', JSON.stringify(session)), sessionA);
     await page.goto(recovery ? '/account/recovery' : '/operator/');
     await page.getByLabel(recovery ? 'Authenticator code' : 'Six-digit code').fill('123456');
@@ -850,6 +852,7 @@ test('ordinary signed-in sessions cannot use recovery as a password-change short
         emailVerified: true,
         sessionId: playerSessionId,
         aal: 'aal1',
+        applicationRole: 'player',
       }),
     }),
   );
