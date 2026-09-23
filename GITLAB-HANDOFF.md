@@ -18,6 +18,11 @@ passing relevant checks, Android evidence, a usable browser preview
 and honest remaining limitations. Keep public lethal play disabled.
 Do not expand this goal into Phases 7–21.
 
+## Later Corrections / Decisions
+
+[what i found and would like to be implemented:
+after creating an account normally on the main page i could assign the said account as an operator on supabase (or where ever just make it easy and tell me) and when they do log in again in the main page instead of a player dashboard it goes straight to the operator dashboard. also make sure that the security will be tight for this (like people assigning themselves as operator or accessing the operator dashboard without proper enrollment) as to not make any loopholes when using developer tools or for a typical hacker]
+
 ## Context
 
 This development task was being executed by OpenAI Codex using /goal.
