@@ -7,6 +7,7 @@ export interface ServerEnvironment {
   databaseSslCaPath?: string;
   supabaseUrl?: string;
   supabasePublishableKey?: string;
+  revision?: string;
 }
 
 function booleanSetting(source: Record<string, string | undefined>, key: string): boolean {
@@ -79,6 +80,10 @@ export function parseEnvironment(source: Record<string, string | undefined>): Se
   }
   const host = source.HOST ?? '127.0.0.1';
   if (!host.trim()) throw new Error('HOST must not be empty');
+  const revision = source.RENDER_GIT_COMMIT;
+  if (revision !== undefined && !/^[0-9a-f]{40}$/i.test(revision)) {
+    throw new Error('RENDER_GIT_COMMIT must be a full Git commit SHA');
+  }
   return {
     nodeEnv,
     host,
@@ -88,5 +93,6 @@ export function parseEnvironment(source: Record<string, string | undefined>): Se
     ...(databaseSslCaPath ? { databaseSslCaPath } : {}),
     ...(supabaseUrl ? { supabaseUrl } : {}),
     ...(supabasePublishableKey ? { supabasePublishableKey } : {}),
+    ...(revision ? { revision } : {}),
   };
 }

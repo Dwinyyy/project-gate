@@ -2,6 +2,8 @@
 
 Status: accepted planning decision from the approved master blueprint; implementation is tracked separately.
 
+The enrollment-before-assignment order below is superseded by [ADR 0010](0010-operator-assignment-and-routing.md), following the owner's 2026-09-22 request. Owner assignment may precede enrollment; actual operator access still requires current verified TOTP and a TOTP-authenticated AAL2 session. Other authentication/recovery boundaries remain in force.
+
 ## Context
 
 Managed identity does not encode life, cooldown, ownership, guild role or operator rights. Private projections and evidence need independent authorization.
@@ -20,7 +22,9 @@ These are Hunter World application boundaries, not restrictions on every direct 
 
 Operator MFA and least privilege are required; player offices never gain operator access. Recovery mode cannot enter the operator MFA flow, and an operator grant is activated only after its owner has enrolled and verified TOTP. Native refresh credentials use reviewed Keychain/Keystore-backed storage. Provider credentials and private content cannot enter player bundles.
 
-Known Task 2.1 acceptance gap: an account already enrolled in MFA needs a recovery-specific TOTP challenge to satisfy the provider's AAL2 password-update policy. The current recovery UI does not offer that challenge. It must be implemented and verified without converting recovery into ordinary application access before authentication is considered complete.
+Recovery now checks enrolled authenticators, offers a recovery-specific TOTP challenge when required and checks assurance again before password replacement. This path must preserve recovery-only authority through MFA, refresh and reload; it cannot enroll a new factor or enter ordinary operator authentication during recovery. A failed security lookup must allow retry without offering password replacement prematurely. Controlled verification does not close Task 2.1: the deployed enrolled-account recovery journey and actual operator enrollment/grant/sign-out journey remain required.
+
+Operator status changes use an owner-only, SECURITY INVOKER management function with an atomic request receipt, accountable requester/reason and database-login attribution. Activation requires an eligible email-verified identity with verified TOTP; it never adds permission rows. Replaying an old activation returns its historical receipt without undoing later suspension. Runtime, public and service-role callers cannot execute this management function. The owner enters credentials and codes in the applications, not in operational scripts.
 
 Provider references: [verification exchanges](https://github.com/supabase/auth/blob/master/internal/api/verify.go), [account-update policy](https://github.com/supabase/auth/blob/master/internal/api/user.go), and [sign-out semantics](https://supabase.com/docs/guides/auth/signout).
 

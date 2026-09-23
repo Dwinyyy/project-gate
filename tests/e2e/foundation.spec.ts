@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { resolve } from 'node:path';
 
 const operatorUserId = '22222222-2222-4222-8222-222222222222';
 const operatorSessionId = '33333333-3333-4333-8333-333333333333';
@@ -65,7 +66,7 @@ function operatorRecoverySession(method = 'recovery') {
   };
 }
 
-function playerUser() {
+function playerUser(factors: TestFactor[] = []) {
   return {
     id: playerUserId,
     aud: 'authenticated',
@@ -76,23 +77,34 @@ function playerUser() {
     app_metadata: { provider: 'email', providers: ['email'] },
     user_metadata: {},
     identities: [],
-    factors: [],
+    factors,
     created_at: '2026-09-13T12:00:00.000Z',
     updated_at: '2026-09-13T12:00:00.000Z',
   };
 }
 
-function playerSession(method: 'password' | 'recovery' | 'otp' | 'signup') {
+function playerSession(
+  method: 'password' | 'recovery' | 'otp' | 'signup',
+  options: {
+    aal?: 'aal1' | 'aal2';
+    factors?: TestFactor[];
+    additionalMethods?: string[];
+  } = {},
+) {
+  const factors = options.factors ?? [];
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
     sub: playerUserId,
     exp: 2_000_000_000,
-    aal: 'aal1',
+    aal: options.aal ?? 'aal1',
     session_id: playerSessionId,
     aud: 'authenticated',
     role: 'authenticated',
     email: 'player@example.test',
-    amr: [{ method, timestamp: 1_789_318_800 }],
+    amr: [method, ...(options.additionalMethods ?? [])].map((name, index) => ({
+      method: name,
+      timestamp: 1_789_318_800 + index,
+    })),
   })}.fixture`;
   return {
     access_token: accessToken,
@@ -100,7 +112,7 @@ function playerSession(method: 'password' | 'recovery' | 'otp' | 'signup') {
     expires_in: 3600,
     expires_at: 2_000_000_000,
     refresh_token: 'fixture-recovery-refresh',
-    user: playerUser(),
+    user: playerUser(factors),
   };
 }
 
@@ -120,25 +132,40 @@ async function useControlledAuth(page: Page, port = 5173) {
 async function restorePlayerSession(
   page: Page,
   method: 'password' | 'recovery' | 'otp' | 'signup',
+  options: Parameters<typeof playerSession>[1] = {},
 ) {
   await useControlledAuth(page);
   await page.route('**/auth/v1/user', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(playerUser()),
+      body: JSON.stringify(playerUser(options.factors)),
     }),
   );
   await page.goto('/account/sign-in');
   await page.evaluate(
     ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
-    { storageKey: 'sb-127-auth-token', session: playerSession(method) },
+    { storageKey: 'sb-127-auth-token', session: playerSession(method, options) },
   );
   await page.reload();
 }
 
 async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
   await useControlledAuth(page, 5174);
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: operatorUserId,
+        email: 'operator@example.test',
+        emailVerified: true,
+        sessionId: operatorSessionId,
+        aal: 'aal1',
+        applicationRole: 'operator',
+      }),
+    }),
+  );
   await page.route('**/auth/v1/token**', (route) =>
     route.fulfill({
       status: 200,
@@ -154,6 +181,232 @@ async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
     }),
   );
 }
+
+test('assigned main-site sign-in opens same-origin operator MFA without another password', async ({ page }) => {
+  await useControlledAuth(page);
+  await page.route('**/auth/v1/token**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(passwordSession('aal1', [])) }),
+  );
+  await page.route('**/auth/v1/user', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(operatorUser([])) }),
+  );
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: operatorUserId,
+        email: 'operator@example.test',
+        emailVerified: true,
+        sessionId: operatorSessionId,
+        aal: 'aal1',
+        applicationRole: 'operator',
+      }),
+    }),
+  );
+  await page.goto('/account/sign-in');
+  await page.getByLabel('Email address').fill('operator@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page).toHaveURL('http://127.0.0.1:5173/operator/');
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operator sign in.' })).toHaveCount(0);
+});
+
+test('ordinary main-site sign-in stays in the player application', async ({ page }) => {
+  await useControlledAuth(page);
+  await page.route('**/auth/v1/token**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(playerSession('password')) }),
+  );
+  await page.route('**/auth/v1/user', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(playerUser()) }),
+  );
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: playerUserId,
+        email: 'player@example.test',
+        emailVerified: true,
+        sessionId: playerSessionId,
+        aal: 'aal1',
+        applicationRole: 'player',
+      }),
+    }),
+  );
+  await page.goto('/account/sign-in');
+  await page.getByLabel('Email address').fill('player@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page).toHaveURL('http://127.0.0.1:5173/');
+  await expect(page.getByRole('heading', { name: 'Welcome to Hunter World.' })).toBeVisible();
+});
+
+test('operator can retry temporary assignment verification failure without signing in again', async ({ page }) => {
+  await useOperatorPasswordSession(page, []);
+  let failLookup = true;
+  let passwordRequests = 0;
+  await page.route('**/auth/v1/token**', (route) => {
+    passwordRequests += 1;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(passwordSession('aal1', [])) });
+  });
+  await page.route('**/v1/auth/session', (route) => route.fulfill({
+    status: failLookup ? 503 : 200,
+    contentType: 'application/json',
+    body: JSON.stringify(failLookup ? { error: { code: 'AUTH_UNAVAILABLE', requestId: 'fixture' } } : {
+      authUserId: operatorUserId, email: 'operator@example.test', emailVerified: true,
+      sessionId: operatorSessionId, aal: 'aal1', applicationRole: 'operator',
+    }),
+  }));
+  await page.goto('http://127.0.0.1:5174/operator/');
+  await page.getByLabel('Operator email').fill('operator@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Operator authentication unavailable.' })).toBeVisible();
+  failLookup = false;
+  await page.getByRole('button', { name: 'Retry verification' }).click({ timeout: 1_000 });
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
+  expect(passwordRequests).toBe(1);
+});
+
+for (const recovery of [false, true]) {
+  test(`${recovery ? 'recovery' : 'operator'} MFA cannot replace a newer login in another tab`, async ({ page, context }) => {
+    const factors: TestFactor[] = [{
+      id: operatorFactorId, status: 'verified', factor_type: 'totp',
+      friendly_name: 'Test authenticator', created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    }];
+    const sessionA = {
+      ...passwordSession('aal1', factors),
+      access_token: accessToken('aal1', recovery ? 'recovery' : 'password'),
+    };
+    const sessionB = playerSession('password');
+    await context.route('**/v1/auth/config', (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({
+        supabaseUrl: 'http://127.0.0.1:5173', supabasePublishableKey: 'sb_publishable_browser_fixture',
+      }),
+    }));
+    await context.route('**/auth/v1/user', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify(route.request().headers().authorization === `Bearer ${sessionB.access_token}`
+        ? playerUser() : operatorUser(factors)),
+    }));
+    await context.route('**/auth/v1/token**', (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify(sessionB),
+    }));
+    await context.route('**/v1/auth/session', (route) => {
+      const isB = route.request().headers().authorization === `Bearer ${sessionB.access_token}`;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        authUserId: isB ? playerUserId : operatorUserId,
+        email: isB ? 'player@example.test' : 'operator@example.test', emailVerified: true,
+        sessionId: isB ? playerSessionId : operatorSessionId, aal: 'aal1',
+        applicationRole: isB ? 'player' : 'operator',
+      }) });
+    });
+    await context.route(`**/auth/v1/factors/${operatorFactorId}/challenge`, (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ id: 'deferred-challenge', type: 'totp', expires_at: 2_000_000_000 }),
+    }));
+    let releaseVerification: () => void = () => undefined;
+    const heldVerification = new Promise<void>((resolveHeld) => { releaseVerification = resolveHeld; });
+    let verificationStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolveStarted) => { verificationStarted = resolveStarted; });
+    let completedVerification: () => void = () => undefined;
+    const completed = new Promise<void>((resolveCompleted) => { completedVerification = resolveCompleted; });
+    await context.route(`**/auth/v1/factors/${operatorFactorId}/verify`, async (route) => {
+      verificationStarted();
+      await heldVerification;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        ...passwordSession('aal2', factors),
+        access_token: accessToken('aal2', recovery ? 'recovery' : 'password'),
+      }) });
+      completedVerification();
+    });
+    await context.route('**/__auth-concurrency-test', (route) => route.fulfill({
+      status: 200, contentType: 'text/html', body: '<!doctype html><body>Test login client</body>',
+    }));
+    await page.goto('/account/sign-in');
+    await page.evaluate((session) => localStorage.setItem('sb-127-auth-token', JSON.stringify(session)), sessionA);
+    await page.goto(recovery ? '/account/recovery' : '/operator/');
+    await page.getByLabel(recovery ? 'Authenticator code' : 'Six-digit code').fill('123456');
+    await page.getByRole('button', { name: 'Verify authenticator' }).click();
+    await started;
+
+    // The second page uses the real public client and SDK, without a second app's
+    // automatic role redirect preventing the deliberately overlapping sign-in.
+    const second = await context.newPage();
+    await second.goto('/__auth-concurrency-test');
+    const moduleUrl = `/@fs/${resolve('packages/client/src/auth.ts').replaceAll('\\', '/')}`;
+    await second.evaluate(async (url) => {
+      const client = await import(url) as typeof import('../../packages/client/src/auth');
+      const controller = await client.createBrowserAuthController();
+      await controller.ready();
+      controller.subscribe(() => { document.body.textContent = controller.getSnapshot().user?.email ?? 'Signed out'; });
+      await controller.signIn('player@example.test', 'long-enough-password');
+    }, moduleUrl);
+    await expect(second.locator('body')).toHaveText('player@example.test');
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token)).toBe(sessionB.access_token);
+    for (const tab of [page, second]) {
+      await tab.evaluate(() => {
+        const originalSetItem = Storage.prototype.setItem;
+        const seen: string[] = [];
+        (window as unknown as { authWrites: string[] }).authWrites = seen;
+        Storage.prototype.setItem = function (key, value) {
+          if (key === 'sb-127-auth-token') seen.push(value);
+          originalSetItem.call(this, key, value);
+        };
+        window.addEventListener('storage', (event) => {
+          if (event.key === 'sb-127-auth-token' && event.newValue) seen.push(event.newValue);
+        });
+      });
+    }
+    releaseVerification();
+    await completed;
+    await expect(page.getByRole('button', { name: 'Verifying…' })).toHaveCount(0);
+    await expect(second.locator('body')).toHaveText('player@example.test');
+    for (const tab of [page, second]) {
+      const result = await tab.evaluate(() => ({
+        current: JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
+        writes: (window as unknown as { authWrites: string[] }).authWrites.map((value) => JSON.parse(value).access_token as string),
+      }));
+      expect(result.current).toBe(sessionB.access_token);
+      expect(result.writes.every((token) => token === sessionB.access_token)).toBe(true);
+    }
+    if (recovery) await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
+    else await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  });
+}
+
+test('unassigned direct operator visit is denied before authenticator enrollment', async ({ page }) => {
+  await useOperatorPasswordSession(page, []);
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: operatorUserId,
+        email: 'operator@example.test',
+        emailVerified: true,
+        sessionId: operatorSessionId,
+        aal: 'aal1',
+        applicationRole: 'player',
+      }),
+    }),
+  );
+  let enrollmentRequests = 0;
+  await page.route('**/auth/v1/factors', (route) => {
+    enrollmentRequests += 1;
+    return route.fulfill({ status: 500, body: '{}' });
+  });
+  await page.goto('http://127.0.0.1:5174/operator/');
+  await page.getByLabel('Operator email').fill('operator@example.test');
+  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
+  expect(enrollmentRequests).toBe(0);
+});
 
 test('player navigation, real API response and responsive layout', async ({ page }) => {
   const errors: string[] = [];
@@ -322,6 +575,153 @@ test('player recovery session stays locked to password replacement across naviga
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
   expect(ordinarySessionRequests).toBe(0);
+});
+
+test('MFA-enrolled player verifies an authenticator before password replacement and stays recovery-only', async ({
+  page,
+}) => {
+  const factors: TestFactor[] = [
+    {
+      id: operatorFactorId,
+      status: 'verified',
+      factor_type: 'totp',
+      friendly_name: 'Player authenticator',
+      created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    },
+  ];
+  let ordinarySessionRequests = 0;
+  let verificationAttempts = 0;
+  await page.route('**/v1/auth/session', (route) => {
+    ordinarySessionRequests += 1;
+    return route.fulfill({ status: 403, body: '{}' });
+  });
+  await restorePlayerSession(page, 'recovery', { factors });
+  await page.route(`**/auth/v1/factors/${operatorFactorId}/challenge`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: `recovery-challenge-${verificationAttempts + 1}`,
+        type: 'totp',
+        expires_at: 2_000_000_000,
+      }),
+    }),
+  );
+  await page.route(`**/auth/v1/factors/${operatorFactorId}/verify`, (route) => {
+    verificationAttempts += 1;
+    if (verificationAttempts === 1) {
+      return route.fulfill({
+        status: 422,
+        contentType: 'application/json',
+        body: JSON.stringify({ error_code: 'invalid_totp', msg: 'private provider detail' }),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        playerSession('recovery', {
+          aal: 'aal2',
+          factors,
+          additionalMethods: ['totp'],
+        }),
+      ),
+    });
+  });
+
+  await expect(
+    page.getByRole('heading', { name: 'Authenticator verification required.' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
+  await page.getByLabel('Authenticator code').fill('111111');
+  await page.getByRole('button', { name: 'Verify authenticator' }).click();
+  await expect(page.getByText('The authenticator code was not accepted.')).toBeVisible();
+  await expect(page.getByLabel('Authenticator code')).toHaveValue('');
+  await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Authenticator code').fill('123456');
+  await page.getByRole('button', { name: 'Verify authenticator' }).click();
+  await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+  await expect(page.getByText('Authenticator verified. Choose a new password.')).toBeVisible();
+  expect(ordinarySessionRequests).toBe(0);
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+  await expect(page.getByText('Recovery in progress')).toBeVisible();
+  expect(ordinarySessionRequests).toBe(0);
+
+  await page.route('**/auth/v1/user', async (route) => {
+    if (route.request().method() !== 'PUT') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(playerUser(factors)),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(playerUser(factors)),
+    });
+  });
+  await page.route('**/auth/v1/logout**', (route) => route.fulfill({ status: 204, body: '' }));
+  await page.getByLabel('New password', { exact: true }).fill('replacement-password');
+  await page.getByLabel('Confirm new password').fill('replacement-password');
+  await page.getByRole('button', { name: 'Update password' }).click();
+  await expect(page).toHaveURL(/\/account\/sign-in$/);
+  await expect(
+    page.getByText('Your password has been updated. Sign in with your new password.'),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('sb-127-auth-token')))
+    .toBeNull();
+});
+
+test('recovery security check can be retried without exposing password controls', async ({
+  page,
+}) => {
+  const factors: TestFactor[] = [
+    {
+      id: operatorFactorId,
+      status: 'verified',
+      factor_type: 'totp',
+      friendly_name: 'Player authenticator',
+      created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    },
+  ];
+  let userAvailable = false;
+  await useControlledAuth(page);
+  await page.route('**/auth/v1/user', (route) => {
+    return route.fulfill(
+      userAvailable
+        ? {
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(playerUser(factors)),
+          }
+        : { status: 503, contentType: 'application/json', body: '{"msg":"provider unavailable"}' },
+    );
+  });
+  await page.goto('/account/sign-in');
+  await page.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: playerSession('recovery', { factors }) },
+  );
+  await page.reload();
+
+  await expect(
+    page.getByRole('heading', { name: 'Recovery verification unavailable.' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
+  userAvailable = true;
+  await page.getByRole('button', { name: 'Try security check again' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Authenticator verification required.' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
 });
 
 test('player password replacement ends the recovery session and requires explicit sign-in', async ({

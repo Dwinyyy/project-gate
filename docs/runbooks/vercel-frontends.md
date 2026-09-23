@@ -1,6 +1,6 @@
 # Vercel frontend preview preparation
 
-This runbook prepares two personal, non-commercial development previews. It does not provision or deploy a Vercel project, make the foundation shell a playable game, or move the authoritative API/worker onto Vercel. A custom domain is not required; Vercel's generated project production URLs are sufficient for the managed Auth checkpoint.
+This runbook records two personal, non-commercial development previews. Both projects now exist: [player](https://project-gate-player.vercel.app) and [operator](https://project-gate-operator.vercel.app). The authoritative API is hosted separately on Render; continuously hosted worker operation is not yet verified. Vercel's production-alias terminology does not establish a commercial production release or playable gameplay. A custom domain is not required for the managed Auth checkpoint.
 
 ## Repository contract
 

@@ -10,6 +10,9 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
-    proxy: { '/v1': 'http://127.0.0.1:3001' },
+    proxy: {
+      '/v1': 'http://127.0.0.1:3001',
+      '/operator': 'http://127.0.0.1:5174',
+    },
   },
 });

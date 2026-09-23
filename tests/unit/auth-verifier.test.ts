@@ -33,7 +33,10 @@ function providerFetch(expectedToken: string, response: Response): typeof fetch 
 
 describe('Supabase access-token verifier', () => {
   it('returns a minimal identity only after the provider validates the same token', async () => {
-    const token = accessToken();
+    const token = accessToken({ amr: [
+      { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
+      { method: 'totp', timestamp: Math.floor(Date.now() / 1000) - 30 },
+    ] });
     const verifier = createSupabaseAuthVerifier({
       supabaseUrl: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_example',
@@ -43,6 +46,7 @@ describe('Supabase access-token verifier', () => {
           id: authUserId,
           email: 'operator@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
+          factors: [{ id: 'factor-1', factor_type: 'totp', status: 'verified' }],
           user_metadata: { operator: true },
         }),
       ),
@@ -52,9 +56,58 @@ describe('Supabase access-token verifier', () => {
       authUserId,
       email: 'operator@example.test',
       emailVerified: true,
+      hasVerifiedTotp: true,
+      totpAuthenticated: true,
       sessionId: '22222222-2222-4222-8222-222222222222',
       aal: 'aal2',
       accessMode: 'standard',
+    });
+  });
+
+  it.each([
+    ['no factors', undefined],
+    ['removed factors', []],
+    ['unverified TOTP', [{ factor_type: 'totp', status: 'unverified' }]],
+    ['verified phone only', [{ factor_type: 'phone', status: 'verified' }]],
+  ])('does not infer a current TOTP from %s or aal2', async (_label, factors) => {
+    const token = accessToken();
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(token, Response.json({
+        id: authUserId,
+        email: 'operator@example.test',
+        email_confirmed_at: '2026-09-13T12:00:00.000Z',
+        ...(factors === undefined ? {} : { factors }),
+        user_metadata: { operator: true, hasVerifiedTotp: true },
+      })),
+    });
+    await expect(verifier.verify(token)).resolves.toMatchObject({ hasVerifiedTotp: false });
+  });
+
+  it('fails closed when the provider factor list is malformed', async () => {
+    const token = accessToken();
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(token, Response.json({ id: authUserId, factors: 'verified' })),
+    });
+    await expect(verifier.verify(token)).resolves.toBeNull();
+  });
+
+  it('does not treat non-TOTP AAL2 as an authenticator challenge', async () => {
+    const token = accessToken({ amr: [
+      { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
+      { method: 'mfa/phone', timestamp: Math.floor(Date.now() / 1000) - 30 },
+    ] });
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co', publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(token, Response.json({ id: authUserId,
+        factors: [{ factor_type: 'totp', status: 'verified' }],
+      })),
+    });
+    await expect(verifier.verify(token)).resolves.toMatchObject({
+      hasVerifiedTotp: true, totpAuthenticated: false,
     });
   });
 

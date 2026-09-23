@@ -16,7 +16,7 @@ No game data, unmanaged auth users, storage buckets or enabled gameplay were cre
 
 `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are the only Auth configuration values the API may return to a browser. The publishable key identifies the Supabase project but does not grant server or database authority. Never place a service-role key, secret key, database URL or migration credential in either browser build or any `VITE_*` variable.
 
-The development redirect allowlist is exact:
+The original local development redirect entries are exact:
 
 - Player registration verification: `http://127.0.0.1:5173/auth/callback`
 - Player password recovery: `http://127.0.0.1:5173/account/recovery`
@@ -26,7 +26,11 @@ Do not add wildcard or production redirect origins to development configuration.
 
 Run `pnpm exec tsx scripts/verify-development.ts` for a non-mutating managed check. It verifies Auth health, email signup with confirmation required, phone sign-in disabled, the API's public configuration projection, rejection of fabricated player/operator tokens, restricted database readiness and worker startup. It deliberately does not register users, send email, enroll an authenticator or record any token or MFA secret. A full live journey needs a dedicated test inbox and separately provisioned operator identity.
 
-Repository settings for the two domain-free Vercel development frontends, their fail-closed API proxy, and the exact managed redirect procedure are in [the Vercel frontend runbook](vercel-frontends.md). No Vercel project, public API, or deployed callback origin has been provisioned yet.
+The player and operator are now hosted at `https://project-gate-player.vercel.app` and `https://project-gate-operator.vercel.app`; the API is hosted on Render. These are development services, and the account-enabled shell is not gameplay. The latest recorded verified frontend code is `1e07173`; recheck current deployment metadata rather than treating this historical SHA as permanently current. Exact API revision and the fresh managed recovery/operator journeys remain acceptance requirements.
+
+Repository settings, the fail-closed API proxy and exact hosted redirect paths are in [the Vercel frontend runbook](vercel-frontends.md). Recheck the managed allowlist before the next mailbox-driven run; never infer it from a healthy frontend response. Use [the operator access runbook](operator-access.md) to prepare the designated identity's attributable grant.
+
+The API now accepts Render's automatically supplied `RENDER_GIT_COMMIT` only as a full Git SHA and returns it as `x-hunter-revision` on responses. Once this code is deployed, inspect that header through `/v1/system/status` on the existing player proxy to match the running API to the reviewed commit. An absent header on an older build does not establish its revision. A 200 readiness response establishes availability only. [Render documents the default commit variable](https://render.com/docs/environment-variables).
 
 ## Verified TLS and repeatable health check
 

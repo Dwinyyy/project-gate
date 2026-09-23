@@ -11,5 +11,6 @@ Accepted design decisions; none establishes provisioned services or implemented 
 - [0007-deployment — Hosting and operational separation](0007-deployment.md)
 - [0008-state-policies — Ownership, death, privacy and recovery policies](0008-state-policies.md)
 - [0009-vercel-development-frontends — Vercel development frontends](0009-vercel-development-frontends.md)
+- [0010-operator-assignment-and-routing — Owner assignment and main-site operator routing](0010-operator-assignment-and-routing.md)
 
 Changes preserve prior records, state a superseding decision, rationale, migration/compatibility impact and validation. Operational defaults and remaining numerical tuning live in [product/defaults.md](../product/defaults.md).

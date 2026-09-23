@@ -4,6 +4,8 @@ export interface AuthIdentity {
   authUserId: string;
   email: string | null;
   emailVerified: boolean;
+  hasVerifiedTotp: boolean;
+  totpAuthenticated: boolean;
   sessionId: string | null;
   aal: 'aal1' | 'aal2';
   accessMode: 'standard' | 'recovery' | 'restricted';
@@ -27,6 +29,7 @@ interface AccessTokenClaims {
   aal: 'aal1' | 'aal2';
   sessionId: string | null;
   accessMode: AuthIdentity['accessMode'];
+  totpAuthenticated: boolean;
 }
 
 function authenticationMethods(amr: unknown): string[] | null {
@@ -86,6 +89,7 @@ function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
         : methods.includes('password')
           ? 'standard'
           : 'restricted',
+      totpAuthenticated: methods.includes('totp'),
     };
   } catch {
     return null;
@@ -121,11 +125,26 @@ export function createSupabaseAuthVerifier(options: SupabaseAuthVerifierOptions)
           typeof user.email_confirmed_at !== 'string'
         )
           return null;
+        if (user.factors !== undefined && !Array.isArray(user.factors)) return null;
+        const factors = (user.factors ?? []) as unknown[];
+        if (
+          !factors.every((factor) =>
+            factor !== null &&
+            typeof factor === 'object' &&
+            typeof (factor as Record<string, unknown>).factor_type === 'string' &&
+            typeof (factor as Record<string, unknown>).status === 'string',
+          )
+        ) return null;
         return {
           authUserId: claims.sub,
           email: user.email ?? null,
           emailVerified:
             typeof user.email_confirmed_at === 'string' && user.email_confirmed_at.length > 0,
+          hasVerifiedTotp: factors.some((factor) => {
+            const current = factor as Record<string, unknown>;
+            return current.factor_type === 'totp' && current.status === 'verified';
+          }),
+          totpAuthenticated: claims.totpAuthenticated,
           sessionId: claims.sessionId,
           aal: claims.aal,
           accessMode: claims.accessMode,

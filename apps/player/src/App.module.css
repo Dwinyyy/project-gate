@@ -655,7 +655,8 @@
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
-.accountForm input {
+.accountForm input,
+.accountForm select {
   width: 100%;
   min-height: 48px;
   padding: 11px 13px;
@@ -667,14 +668,17 @@
   font: 16px var(--hw-font);
   scroll-margin-block: 20px;
 }
-.accountForm input:hover {
+.accountForm input:hover,
+.accountForm select:hover {
   border-color: #3b5060;
 }
-.accountForm input:focus-visible {
+.accountForm input:focus-visible,
+.accountForm select:focus-visible {
   border-color: var(--hw-accent);
   box-shadow: 0 0 0 3px #81e9cc1f;
 }
-.accountForm input:disabled {
+.accountForm input:disabled,
+.accountForm select:disabled {
   opacity: 0.6;
 }
 .fieldHint {

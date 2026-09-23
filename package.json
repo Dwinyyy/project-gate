@@ -24,7 +24,7 @@
     "test:e2e": "playwright test",
     "build": "pnpm build:server && pnpm build:player && pnpm build:operator && pnpm check:boundaries",
     "build:server": "tsup",
-    "build:player": "vite build --config apps/player/vite.config.ts",
+    "build:player": "tsx scripts/build-player-with-operator.ts",
     "build:operator": "vite build --config apps/operator/vite.config.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",

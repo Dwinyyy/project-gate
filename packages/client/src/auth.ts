@@ -102,6 +102,18 @@ export interface AuthBackend {
     factorId: string;
     code: string;
   }): Promise<AuthBackendResult<AuthBackendSession>>;
+  beginBoundSession?(session: AuthBackendSession): Promise<BoundAuthSession>;
+}
+
+export interface BoundAuthSession {
+  isCurrent(): Promise<boolean>;
+  getMfaState(): ReturnType<AuthBackend['getMfaState']>;
+  enrollTotp(): ReturnType<AuthBackend['enrollTotp']>;
+  verifyTotp(input: { factorId: string; code: string }): ReturnType<AuthBackend['verifyTotp']>;
+  updatePassword(password: string): ReturnType<AuthBackend['updatePassword']>;
+  signOut(): ReturnType<AuthBackend['signOut']>;
+  promote(): Promise<AuthBackendSession | null>;
+  clear(): Promise<boolean>;
 }
 
 export interface AuthSnapshot {
@@ -120,6 +132,8 @@ export interface AuthController {
   signOut(): Promise<void>;
   requestPasswordRecovery(email: string, redirectTo: string): Promise<void>;
   updatePassword(password: string): Promise<void>;
+  getRecoveryMfaStatus(): Promise<MfaStatus>;
+  verifyRecoveryTotp(factorId: string, code: string): Promise<void>;
   getMfaStatus(): Promise<MfaStatus>;
   enrollTotp(): Promise<TotpEnrollment>;
   verifyTotp(factorId: string, code: string): Promise<void>;
@@ -251,6 +265,27 @@ function snapshotForSession(
     : { phase: 'anonymous', user: null, accessToken: null, error: null };
 }
 
+function mfaStatus(state: {
+  currentLevel: 'aal1' | 'aal2' | null;
+  verifiedTotpFactorIds: string[];
+}): MfaStatus {
+  return {
+    assurance:
+      state.currentLevel === 'aal2'
+        ? 'aal2'
+        : state.verifiedTotpFactorIds.length > 0
+          ? 'aal1'
+          : 'unenrolled',
+    verifiedTotpFactorIds: [...state.verifiedTotpFactorIds],
+  };
+}
+
+function validateTotp(factorId: string, code: string): void {
+  if (!factorId || !/^\d{6}$/.test(code)) {
+    throw new AuthActionError('invalid_input', 'Enter the six-digit authenticator code.');
+  }
+}
+
 export function createAuthControllerForBackend(backend: AuthBackend): AuthController {
   let snapshot: AuthSnapshot = {
     phase: 'initializing',
@@ -259,6 +294,8 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
     error: null,
   };
   let revision = 0;
+  let recoveryGeneration = 0;
+  let pendingRecoveryVerification: { generation: number; userId: string } | null = null;
   let disposed = false;
   const listeners = new Set<() => void>();
   const publish = (next: AuthSnapshot) => {
@@ -266,9 +303,49 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
     snapshot = next;
     for (const listener of listeners) listener();
   };
+  const publishSession = (
+    session: AuthBackendSession | null,
+    forceRecovery = false,
+    restartRecovery = false,
+  ) => {
+    const next = snapshotForSession(session, forceRecovery);
+    const sameRecovery =
+      !restartRecovery &&
+      snapshot.phase === 'recovery' &&
+      next.phase === 'recovery' &&
+      snapshot.user?.id === next.user?.id;
+    if (!sameRecovery && (snapshot.phase === 'recovery' || next.phase === 'recovery')) {
+      recoveryGeneration += 1;
+    }
+    publish(next);
+  };
+  const recoveryContext = () => {
+    if (snapshot.phase !== 'recovery' || !snapshot.user) {
+      throw new AuthActionError(
+        'recovery_required',
+        'Open a fresh password-recovery link before continuing.',
+      );
+    }
+    return { generation: recoveryGeneration, userId: snapshot.user.id };
+  };
+  const recoveryIsCurrent = (context: { generation: number; userId: string }) =>
+    snapshot.phase === 'recovery' &&
+    snapshot.user?.id === context.userId &&
+    recoveryGeneration === context.generation;
+  const recoveryChanged = () =>
+    new AuthActionError(
+      'recovery_required',
+      'The recovery session changed. Open the newest recovery link and try again.',
+    );
   const unsubscribeBackend = backend.subscribe((event, nextSession) => {
+    if (
+      event === 'MFA_CHALLENGE_VERIFIED' &&
+      pendingRecoveryVerification &&
+      (!recoveryIsCurrent(pendingRecoveryVerification) ||
+        nextSession?.user.id !== pendingRecoveryVerification.userId)
+    ) return;
     revision += 1;
-    publish(snapshotForSession(nextSession, event === 'PASSWORD_RECOVERY'));
+    publishSession(nextSession, event === 'PASSWORD_RECOVERY', event === 'PASSWORD_RECOVERY');
   });
   const initializationRevision = revision;
   const readyPromise = backend
@@ -284,7 +361,7 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
         });
         return;
       }
-      publish(snapshotForSession(result.data ?? null));
+      publishSession(result.data ?? null);
     })
     .catch(() => {
       publish({
@@ -317,12 +394,12 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       const nextSession = requireData(
         await backend.signIn({ email: normalizeEmail(email), password }),
       );
-      publish(snapshotForSession(nextSession));
+      publishSession(nextSession);
     },
     async signOut() {
       const result = await backend.signOut('global');
       if (result.error) throw actionError(result.error);
-      publish(snapshotForSession(null));
+      publishSession(null);
     },
     async requestPasswordRecovery(email, redirectTo) {
       const result = await backend.requestPasswordRecovery({
@@ -333,22 +410,95 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
     },
     async updatePassword(password) {
       validatePassword(password);
-      if (snapshot.phase !== 'recovery') {
+      const context = recoveryContext();
+      const bound = backend.beginBoundSession
+        ? await backend.beginBoundSession({
+            accessToken: snapshot.accessToken!,
+            user: snapshot.user!,
+            accessMode: 'recovery',
+          })
+        : null;
+      const state = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
+      if (!recoveryIsCurrent(context)) throw recoveryChanged();
+      if (bound && !(await bound.isCurrent())) throw recoveryChanged();
+      if (state.assurance === 'aal1') {
         throw new AuthActionError(
-          'recovery_required',
-          'Open a fresh password-recovery link before choosing a new password.',
+          'mfa_required',
+          'Verify your authenticator code before choosing a new password.',
         );
       }
-      const updated = await backend.updatePassword(password);
+      const updated = await (bound ?? backend).updatePassword(password);
       if (updated.error) throw actionError(updated.error);
-      const signedOut = await backend.signOut('global');
+      if (!bound && !recoveryIsCurrent(context)) {
+        throw new AuthActionError(
+          'sign_out_incomplete',
+          'Your password was updated, but the recovery session changed before global sign-out could be confirmed. Return to sign in with your new password, then retry signing out.',
+        );
+      }
+      const signedOut = bound ? await bound.signOut() : await backend.signOut('global');
       if (signedOut.error) {
         throw new AuthActionError(
           'sign_out_incomplete',
           'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
         );
       }
-      publish(snapshotForSession(null));
+      if (bound) {
+        if (!(await bound.clear())) throw recoveryChanged();
+      } else {
+        publishSession(null);
+      }
+    },
+    async getRecoveryMfaStatus() {
+      const context = recoveryContext();
+      const bound = backend.beginBoundSession
+        ? await backend.beginBoundSession({
+            accessToken: snapshot.accessToken!, user: snapshot.user!, accessMode: 'recovery',
+          })
+        : null;
+      const status = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
+      if (!recoveryIsCurrent(context)) throw recoveryChanged();
+      if (bound && !(await bound.isCurrent())) throw recoveryChanged();
+      return status;
+    },
+    async verifyRecoveryTotp(factorId, code) {
+      const context = recoveryContext();
+      validateTotp(factorId, code);
+      const bound = backend.beginBoundSession
+        ? await backend.beginBoundSession({
+            accessToken: snapshot.accessToken!, user: snapshot.user!, accessMode: 'recovery',
+          })
+        : null;
+      pendingRecoveryVerification = context;
+      let nextSession: AuthBackendSession;
+      try {
+        nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
+      } finally {
+        pendingRecoveryVerification = null;
+      }
+      if (!recoveryIsCurrent(context)) {
+        if (
+          snapshot.user?.id === nextSession.user.id &&
+          snapshot.accessToken === nextSession.accessToken
+        ) {
+          await backend.signOut('global');
+          publishSession(null);
+        }
+        throw recoveryChanged();
+      }
+      if (nextSession.accessMode !== 'recovery') {
+        if (bound) await bound.clear();
+        else {
+          await backend.signOut('global');
+          publishSession(null);
+        }
+        throw new AuthActionError(
+          'expired_link',
+          'This recovery session could not be verified safely. Request a new recovery link.',
+        );
+      }
+      if (bound) {
+        if (!(await bound.promote())) throw recoveryChanged();
+      } else publishSession(nextSession, true);
     },
     async getMfaStatus() {
       if (snapshot.phase === 'restricted') {
@@ -363,16 +513,17 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
           'Complete password recovery and sign in again before using an authenticator.',
         );
       }
-      const state = requireData(await backend.getMfaState());
-      return {
-        assurance:
-          state.currentLevel === 'aal2'
-            ? 'aal2'
-            : state.verifiedTotpFactorIds.length > 0
-              ? 'aal1'
-              : 'unenrolled',
-        verifiedTotpFactorIds: [...state.verifiedTotpFactorIds],
-      };
+      const origin = snapshot;
+      const bound = backend.beginBoundSession && origin.user && origin.accessToken
+        ? await backend.beginBoundSession({
+            accessToken: origin.accessToken, user: origin.user, accessMode: 'standard',
+          })
+        : null;
+      const result = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
+      if (bound && !(await bound.isCurrent())) {
+        throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+      }
+      return result;
     },
     async enrollTotp() {
       if (snapshot.phase === 'restricted') {
@@ -387,7 +538,16 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
           'Complete password recovery and sign in again before using an authenticator.',
         );
       }
-      const enrollment = requireData(await backend.enrollTotp());
+      const origin = snapshot;
+      const bound = backend.beginBoundSession && origin.user && origin.accessToken
+        ? await backend.beginBoundSession({
+            accessToken: origin.accessToken, user: origin.user, accessMode: 'standard',
+          })
+        : null;
+      const enrollment = requireData(await (bound ?? backend).enrollTotp());
+      if (bound && !(await bound.isCurrent())) {
+        throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+      }
       return {
         ...enrollment,
         qrCode: enrollment.qrCode.startsWith('data:')
@@ -408,11 +568,23 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
           'Complete password recovery and sign in again before using an authenticator.',
         );
       }
-      if (!factorId || !/^\d{6}$/.test(code)) {
-        throw new AuthActionError('invalid_input', 'Enter the six-digit authenticator code.');
-      }
-      const nextSession = requireData(await backend.verifyTotp({ factorId, code }));
-      publish(snapshotForSession(nextSession));
+      validateTotp(factorId, code);
+      const origin = snapshot;
+      const bound = backend.beginBoundSession && origin.user && origin.accessToken
+        ? await backend.beginBoundSession({
+            accessToken: origin.accessToken, user: origin.user, accessMode: 'standard',
+          })
+        : null;
+      const nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
+      if (bound) {
+        if (!(await bound.promote())) {
+          throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+        }
+      } else if (
+        snapshot.user?.id === origin.user?.id &&
+        snapshot.accessToken === origin.accessToken
+      ) publishSession(nextSession);
+      else throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
     },
     dispose() {
       if (disposed) return;
@@ -447,7 +619,202 @@ function backendSession(value: Session | null): AuthBackendSession | null {
     : null;
 }
 
-function createSupabaseBackend(client: SupabaseClient): AuthBackend {
+let isolatedClientId = 0;
+
+class BrowserSessionStore {
+  readonly storageKey: string;
+  private readonly lockName: string;
+
+  constructor(
+    private readonly config: AuthConfig,
+    private readonly fetchAuth: typeof fetch,
+  ) {
+    this.storageKey = `sb-${new URL(config.supabaseUrl).hostname.split('.')[0]}-auth-token`;
+    this.lockName = `lock:${this.storageKey}`;
+  }
+
+  async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const locks = globalThis.navigator?.locks;
+    if (!locks?.request) {
+      throw new AuthActionError(
+        'unavailable',
+        'Secure account coordination is unavailable in this browser. Try a supported browser.',
+      );
+    }
+    try {
+      return await locks.request(this.lockName, { mode: 'exclusive' }, async (lock) => {
+        if (!lock) throw new Error('account lock unavailable');
+        return operation();
+      });
+    } catch (error) {
+      if (error instanceof AuthActionError) throw error;
+      throw new AuthActionError('unavailable', 'Account access is unavailable. Try again shortly.');
+    }
+  }
+
+  sdkLock = <T>(_name: string, _timeout: number, operation: () => Promise<T>): Promise<T> =>
+    this.exclusive(operation);
+
+  private readRaw(): string | null {
+    return globalThis.localStorage.getItem(this.storageKey);
+  }
+
+  private parsed(raw: string | null): Session | null {
+    if (!raw) return null;
+    try {
+      const session: unknown = JSON.parse(raw);
+      if (!session || typeof session !== 'object') return null;
+      const value = session as Record<string, unknown>;
+      return typeof value.access_token === 'string' &&
+        typeof value.refresh_token === 'string' &&
+        value.user && typeof value.user === 'object' &&
+        typeof (value.user as Record<string, unknown>).id === 'string'
+        ? session as Session : null;
+    } catch {
+      return null;
+    }
+  }
+
+  current(): Promise<AuthBackendSession | null> {
+    return this.exclusive(async () => backendSession(this.parsed(this.readRaw())));
+  }
+
+  async begin(expected: AuthBackendSession, changed: () => void): Promise<BoundAuthSession> {
+    const origin = await this.exclusive(async () => {
+      const raw = this.readRaw();
+      const session = this.parsed(raw);
+      if (!session || !raw ||
+        session.access_token !== expected.accessToken ||
+        session.user.id !== expected.user.id ||
+        authAccessModeFromToken(session.access_token) !== expected.accessMode) return null;
+      return { raw, session };
+    });
+    if (!origin) {
+      throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+    }
+
+    const privateClient = createClient(this.config.supabaseUrl, this.config.supabasePublishableKey, {
+      auth: {
+        storageKey: `${this.storageKey}-isolated-${++isolatedClientId}`,
+        flowType: 'pkce', autoRefreshToken: false,
+        detectSessionInUrl: false, persistSession: false,
+      },
+      global: { fetch: this.fetchAuth },
+    });
+    const seeded = await privateClient.auth.setSession({
+      access_token: origin.session.access_token,
+      refresh_token: origin.session.refresh_token,
+    });
+    const seededSession = backendSession(seeded.data.session);
+    if (seeded.error || !seededSession ||
+      seededSession.user.id !== expected.user.id ||
+      seededSession.accessMode !== expected.accessMode) {
+      throw new AuthActionError('unavailable', 'Account access is unavailable. Try again shortly.');
+    }
+
+    let revision = origin.raw;
+    const sameRevision = () => this.exclusive(async () => this.readRaw() === revision);
+    const exchange = async (next: Session | null) => {
+      const exchanged = await this.exclusive(async () => {
+        if (this.readRaw() !== revision) return false;
+        if (next) {
+          revision = JSON.stringify(next);
+          globalThis.localStorage.setItem(this.storageKey, revision);
+        } else {
+          globalThis.localStorage.removeItem(this.storageKey);
+          revision = '';
+        }
+        return true;
+      });
+      if (exchanged) changed();
+      return exchanged;
+    };
+    return {
+      isCurrent: sameRevision,
+      getMfaState: () => supabaseMfaState(privateClient),
+      enrollTotp: () => supabaseEnrollTotp(privateClient),
+      verifyTotp: (input) => supabaseVerifyTotp(privateClient, input),
+      async updatePassword(password) {
+        const { data, error } = await privateClient.auth.updateUser({ password });
+        return { data: data.user ? undefined : null, error: backendError(error) };
+      },
+      async signOut() {
+        const { error } = await privateClient.auth.signOut({ scope: 'global' });
+        return { data: undefined, error: backendError(error) };
+      },
+      async promote() {
+        const { data, error } = await privateClient.auth.getSession();
+        const next = data.session;
+        const projected = backendSession(next);
+        if (error || !next || !projected || projected.user.id !== expected.user.id ||
+          projected.accessMode !== expected.accessMode) return null;
+        return await exchange(next) ? projected : null;
+      },
+      clear: () => exchange(null),
+    };
+  }
+}
+
+async function supabaseMfaState(client: SupabaseClient): ReturnType<AuthBackend['getMfaState']> {
+  const factors = await client.auth.mfa.listFactors();
+  if (factors.error) return { data: null, error: backendError(factors.error) };
+  const assurance = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (assurance.error) return { data: null, error: backendError(assurance.error) };
+  const rawCurrentLevel: string | null = assurance.data.currentLevel;
+  const currentLevel: 'aal1' | 'aal2' | null =
+    rawCurrentLevel === 'aal1' ? 'aal1' : rawCurrentLevel === 'aal2' ? 'aal2' : null;
+  return {
+    data: { currentLevel, verifiedTotpFactorIds: factors.data.totp.map((factor) => factor.id) },
+    error: null,
+  };
+}
+
+async function supabaseEnrollTotp(client: SupabaseClient): ReturnType<AuthBackend['enrollTotp']> {
+  const { data, error } = await client.auth.mfa.enroll({
+    factorType: 'totp', friendlyName: 'Hunter World Operator', issuer: 'Hunter World',
+  });
+  return {
+    data: data ? {
+      factorId: data.id, qrCode: data.totp.qr_code,
+      secret: data.totp.secret, uri: data.totp.uri,
+    } : null,
+    error: backendError(error),
+  };
+}
+
+async function supabaseVerifyTotp(
+  client: SupabaseClient,
+  input: { factorId: string; code: string },
+): ReturnType<AuthBackend['verifyTotp']> {
+  const { data, error } = await client.auth.mfa.challengeAndVerify(input);
+  const accessMode = data ? authAccessModeFromToken(data.access_token) : null;
+  return {
+    data: data && accessMode ? {
+      accessToken: data.access_token,
+      user: { id: data.user.id, email: data.user.email ?? null },
+      accessMode,
+    } : null,
+    error: backendError(error),
+  };
+}
+
+function createSupabaseBackend(client: SupabaseClient, browser?: BrowserSessionStore): AuthBackend {
+  const listeners = new Set<(event: AuthBackendEvent, session: AuthBackendSession | null) => void>();
+  let reconcileGeneration = 0;
+  const reconcile = () => {
+    const generation = ++reconcileGeneration;
+    // SDK callbacks may run under its lock. Reconciliation must leave that callback first.
+    globalThis.setTimeout(() => {
+      if (!browser) return;
+      void browser.current().then((session) => {
+        if (generation !== reconcileGeneration) return;
+        for (const listener of listeners) listener('TOKEN_REFRESHED', session);
+      }).catch(() => {
+        if (generation !== reconcileGeneration) return;
+        for (const listener of listeners) listener('SIGNED_OUT', null);
+      });
+    }, 0);
+  };
   return {
     async getSession() {
       const { data, error } = await client.auth.getSession();
@@ -455,23 +822,38 @@ function createSupabaseBackend(client: SupabaseClient): AuthBackend {
     },
     subscribe(listener) {
       const { data } = client.auth.onAuthStateChange((event, nextSession) => {
-        listener(event, backendSession(nextSession));
+        if (browser) reconcile();
+        else listener(event, backendSession(nextSession));
       });
-      return () => data.subscription.unsubscribe();
+      listeners.add(listener);
+      const storageListener = (event: StorageEvent) => {
+        if (event.key === browser?.storageKey) reconcile();
+      };
+      if (browser) globalThis.addEventListener?.('storage', storageListener);
+      return () => {
+        data.subscription.unsubscribe();
+        listeners.delete(listener);
+        if (browser) globalThis.removeEventListener?.('storage', storageListener);
+      };
     },
     async signUp(input) {
-      const { data, error } = await client.auth.signUp({
+      const { data, error } = await (browser ? browser.exclusive(() => client.auth.signUp({
         email: input.email,
         password: input.password,
         options: { emailRedirectTo: input.redirectTo },
-      });
+      })) : client.auth.signUp({
+        email: input.email, password: input.password,
+        options: { emailRedirectTo: input.redirectTo },
+      }));
       return {
         data: { session: backendSession(data.session) },
         error: backendError(error),
       };
     },
     async signIn(input) {
-      const { data, error } = await client.auth.signInWithPassword(input);
+      const { data, error } = await (browser
+        ? browser.exclusive(() => client.auth.signInWithPassword(input))
+        : client.auth.signInWithPassword(input));
       return { data: backendSession(data.session), error: backendError(error) };
     },
     async signOut(scope) {
@@ -493,54 +875,15 @@ function createSupabaseBackend(client: SupabaseClient): AuthBackend {
       return { data: backendSession(data.session), error: backendError(error) };
     },
     async getMfaState() {
-      const factors = await client.auth.mfa.listFactors();
-      if (factors.error) return { data: null, error: backendError(factors.error) };
-      const assurance = await client.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (assurance.error) return { data: null, error: backendError(assurance.error) };
-      const rawCurrentLevel: string | null = assurance.data.currentLevel;
-      const currentLevel: 'aal1' | 'aal2' | null =
-        rawCurrentLevel === 'aal1' ? 'aal1' : rawCurrentLevel === 'aal2' ? 'aal2' : null;
-      return {
-        data: {
-          currentLevel,
-          verifiedTotpFactorIds: factors.data.totp.map((factor) => factor.id),
-        },
-        error: null,
-      };
+      return supabaseMfaState(client);
     },
     async enrollTotp() {
-      const { data, error } = await client.auth.mfa.enroll({
-        factorType: 'totp',
-        friendlyName: 'Hunter World Operator',
-        issuer: 'Hunter World',
-      });
-      return {
-        data: data
-          ? {
-              factorId: data.id,
-              qrCode: data.totp.qr_code,
-              secret: data.totp.secret,
-              uri: data.totp.uri,
-            }
-          : null,
-        error: backendError(error),
-      };
+      return supabaseEnrollTotp(client);
     },
     async verifyTotp(input) {
-      const { data, error } = await client.auth.mfa.challengeAndVerify(input);
-      const accessMode = data ? authAccessModeFromToken(data.access_token) : null;
-      return {
-        data:
-          data && accessMode
-            ? {
-                accessToken: data.access_token,
-                user: { id: data.user.id, email: data.user.email ?? null },
-                accessMode,
-              }
-            : null,
-        error: backendError(error),
-      };
+      return supabaseVerifyTotp(client, input);
     },
+    ...(browser ? { beginBoundSession: (session: AuthBackendSession) => browser.begin(session, reconcile) } : {}),
   };
 }
 
@@ -598,15 +941,20 @@ export async function createBrowserAuthController(
   fetchAuth: typeof fetch = globalThis.fetch,
 ): Promise<AuthController> {
   const config = await getAuthConfig(fetchAuth);
+  const browser = new BrowserSessionStore(config, fetchAuth);
   const client = createClient(config.supabaseUrl, config.supabasePublishableKey, {
     auth: {
+      storageKey: browser.storageKey,
+      storage: globalThis.localStorage,
+      lock: browser.sdkLock,
       flowType: 'pkce',
       autoRefreshToken: true,
       detectSessionInUrl: true,
       persistSession: true,
     },
+    global: { fetch: fetchAuth },
   });
-  return createAuthControllerForBackend(createSupabaseBackend(client));
+  return createAuthControllerForBackend(createSupabaseBackend(client, browser));
 }
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -674,14 +1022,15 @@ export async function getSelfSession(
   if (!value || typeof value !== 'object') throw actionError(null);
   const session = value as Record<string, unknown>;
   if (
-    !hasOnlyKeys(session, ['authUserId', 'email', 'emailVerified', 'sessionId', 'aal']) ||
+    !hasOnlyKeys(session, ['authUserId', 'email', 'emailVerified', 'sessionId', 'aal', 'applicationRole']) ||
     typeof session.authUserId !== 'string' ||
     !uuidPattern.test(session.authUserId) ||
     (session.email !== null && typeof session.email !== 'string') ||
     typeof session.emailVerified !== 'boolean' ||
     (session.sessionId !== null &&
       (typeof session.sessionId !== 'string' || !uuidPattern.test(session.sessionId))) ||
-    (session.aal !== 'aal1' && session.aal !== 'aal2')
+    (session.aal !== 'aal1' && session.aal !== 'aal2') ||
+    (session.applicationRole !== 'player' && session.applicationRole !== 'operator')
   )
     throw actionError(null);
   return session as unknown as SelfSession;

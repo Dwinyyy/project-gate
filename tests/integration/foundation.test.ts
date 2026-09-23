@@ -5,6 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile, fork, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { prepareOperatorStatusChange } from '../../scripts/lib/operator-provisioning.js';
 import {
   createDatabase,
   findActiveOperator,
@@ -45,7 +46,7 @@ test('queue helper functions have a pinned trusted search path', async () => {
 });
 beforeAll(async () => {
   await owner.query(
-    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; END $$",
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF; END $$",
   );
   await migrate(connectionString);
   await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/seed.ts'], {
@@ -57,6 +58,22 @@ beforeAll(async () => {
       DATABASE_URL: runtimeUrl.toString(),
     },
   });
+  // Minimal provider-owned identity fixture; real Supabase journeys are verified separately.
+  await owner.query(`CREATE SCHEMA auth;
+    CREATE TABLE auth.users (
+      id uuid PRIMARY KEY,
+      email text,
+      email_confirmed_at timestamptz,
+      banned_until timestamptz,
+      deleted_at timestamptz,
+      is_anonymous boolean NOT NULL DEFAULT false
+    );
+    CREATE TABLE auth.mfa_factors (
+      id uuid PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES auth.users(id),
+      factor_type text NOT NULL,
+      status text NOT NULL
+    )`);
 });
 afterAll(async () => {
   await database.close();
@@ -332,4 +349,185 @@ test('operator access is private, current, and read-only to the runtime', async 
   } finally {
     await owner.query('DELETE FROM ops.operator_accounts WHERE auth_user_id = $1', [authUserId]);
   }
+});
+
+async function verifiedOperatorCandidate(withMfa = true): Promise<string> {
+  const id = randomUUID();
+  await owner.query('INSERT INTO auth.users(id, email, email_confirmed_at) VALUES ($1, $2, now())', [
+    id,
+    `${id}@example.test`,
+  ]);
+  if (withMfa) {
+    await owner.query(
+      "INSERT INTO auth.mfa_factors(id, user_id, factor_type, status) VALUES ($1, $2, 'totp', 'verified')",
+      [randomUUID(), id],
+    );
+  }
+  return id;
+}
+
+function operatorRequest(authUserId: string, status: 'active' | 'suspended' = 'active') {
+  return {
+    requestId: randomUUID(),
+    authUserId,
+    status,
+    requestedBy: 'integration-test-owner',
+    reason: 'Designated operator access acceptance',
+  };
+}
+
+test('owner assignment can precede TOTP without adding administrative permissions', async () => {
+  const id = await verifiedOperatorCandidate(false);
+  const sql = prepareOperatorStatusChange(operatorRequest(id));
+  await owner.query(sql);
+  await expect(findActiveOperator(database.pool, id)).resolves.toEqual({
+    authUserId: id,
+    permissions: [],
+  });
+  expect(
+    (await owner.query('SELECT * FROM ops.operator_permissions WHERE auth_user_id = $1', [id]))
+      .rowCount,
+  ).toBe(0);
+});
+
+test('owner email assignment is attributable, retry-safe and does not undo suspension on replay', async () => {
+  const id = await verifiedOperatorCandidate(false);
+  const requestId = randomUUID();
+  const args = [`  ${id.toUpperCase()}@EXAMPLE.TEST  `, 'active', 'project-owner', 'Operator onboarding', requestId];
+  const query = 'SELECT ops.set_operator_status_by_email($1, $2, $3, $4, $5) AS receipt';
+  const assigned = await Promise.all([owner.query(query, args), owner.query(query, args)]);
+  expect(assigned[0]?.rows[0]?.receipt).toMatchObject({
+    request_id: requestId,
+    auth_user_id: id,
+    new_status: 'active',
+    requested_by: 'project-owner',
+    database_actor: 'postgres',
+  });
+  expect(assigned[1]?.rows[0]?.receipt).toEqual(assigned[0]?.rows[0]?.receipt);
+  await owner.query(query, [`${id}@example.test`, 'suspended', 'project-owner', 'End test access', randomUUID()]);
+  await owner.query(query, args);
+  await expect(findActiveOperator(database.pool, id)).resolves.toBeNull();
+  await expect(owner.query(query, [args[0], 'active', 'project-owner', 'Changed reason', requestId])).rejects.toThrow('different terms');
+  expect((await owner.query('SELECT * FROM ops.operator_access_changes WHERE request_id = $1', [requestId])).rowCount).toBe(1);
+});
+
+test('email management fails safely for missing, ambiguous and unverified identities', async () => {
+  const query = 'SELECT ops.set_operator_status_by_email($1, $2, $3, $4)';
+  const assign = (email: string) => owner.query(query, [email, 'active', 'project-owner', 'Eligibility test']);
+  await expect(assign('missing@example.test')).rejects.toThrow('exactly one account');
+  await expect(assign('bad\naddress@example.test')).rejects.toThrow('Invalid operator email');
+  const id = await verifiedOperatorCandidate(false);
+  await owner.query('UPDATE auth.users SET email_confirmed_at = NULL WHERE id = $1', [id]);
+  await expect(assign(`${id}@example.test`)).rejects.toThrow('verified eligible account');
+  const duplicateId = await verifiedOperatorCandidate(false);
+  await owner.query('UPDATE auth.users SET email = $1 WHERE id = $2', [`${id}@example.test`, duplicateId]);
+  await expect(assign(`${id}@example.test`)).rejects.toThrow('exactly one account');
+  expect((await owner.query('SELECT * FROM ops.operator_accounts WHERE auth_user_id = ANY($1::uuid[])', [[id, duplicateId]])).rowCount).toBe(0);
+});
+
+test('operator provisioning is attributable, idempotent and cannot replay a grant over suspension', async () => {
+  const id = await verifiedOperatorCandidate();
+  const request = operatorRequest(id);
+  const sql = prepareOperatorStatusChange(request);
+  await Promise.all([owner.query(sql), owner.query(sql), owner.query(sql)]);
+  await expect(findActiveOperator(database.pool, id)).resolves.toEqual({
+    authUserId: id,
+    permissions: [],
+  });
+  const receipt = await owner.query(
+    'SELECT * FROM ops.operator_access_changes WHERE request_id = $1',
+    [request.requestId],
+  );
+  expect(receipt.rowCount).toBe(1);
+  expect(receipt.rows[0]).toMatchObject({
+    auth_user_id: id,
+    previous_status: null,
+    new_status: 'active',
+    requested_by: request.requestedBy,
+    reason: request.reason,
+    database_actor: 'postgres',
+  });
+  await owner.query(prepareOperatorStatusChange(operatorRequest(id, 'suspended')));
+  await owner.query(sql);
+  await expect(findActiveOperator(database.pool, id)).resolves.toBeNull();
+  await expect(
+    owner.query(prepareOperatorStatusChange({ ...request, reason: 'changed terms' })),
+  ).rejects.toThrow('different terms');
+});
+
+test('operator provisioning requires a current verified eligible provider identity', async () => {
+  const missing = randomUUID();
+  await expect(owner.query(prepareOperatorStatusChange(operatorRequest(missing)))).rejects.toThrow(
+    'verified eligible account',
+  );
+  for (const state of ['unverified', 'banned', 'deleted', 'anonymous']) {
+    const id = await verifiedOperatorCandidate();
+    if (state === 'unverified')
+      await owner.query('UPDATE auth.users SET email_confirmed_at = NULL WHERE id = $1', [id]);
+    if (state === 'banned')
+      await owner.query(
+        "UPDATE auth.users SET banned_until = now() + interval '1 day' WHERE id = $1",
+        [id],
+      );
+    if (state === 'deleted')
+      await owner.query('UPDATE auth.users SET deleted_at = now() WHERE id = $1', [id]);
+    if (state === 'anonymous')
+      await owner.query('UPDATE auth.users SET is_anonymous = true WHERE id = $1', [id]);
+    await expect(owner.query(prepareOperatorStatusChange(operatorRequest(id)))).rejects.toThrow(
+      'verified eligible account',
+    );
+    expect(
+      (await owner.query('SELECT * FROM ops.operator_accounts WHERE auth_user_id = $1', [id]))
+        .rowCount,
+    ).toBe(0);
+  }
+});
+
+test('operator status and audit receipt roll back together and reasons remain data', async () => {
+  const id = await verifiedOperatorCandidate();
+  const reason = "Owner's \\ review'); DROP TABLE ops.operator_accounts; --";
+  const request = { ...operatorRequest(id), reason };
+  const client = await owner.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(prepareOperatorStatusChange(request));
+  } finally {
+    await client.query('ROLLBACK');
+    client.release();
+  }
+  expect(
+    (await owner.query('SELECT * FROM ops.operator_accounts WHERE auth_user_id = $1', [id]))
+      .rowCount,
+  ).toBe(0);
+  expect(
+    (
+      await owner.query('SELECT * FROM ops.operator_access_changes WHERE request_id = $1', [
+        request.requestId,
+      ])
+    ).rowCount,
+  ).toBe(0);
+  await owner.query(prepareOperatorStatusChange(request));
+  expect(
+    (
+      await owner.query('SELECT reason FROM ops.operator_access_changes WHERE request_id = $1', [
+        request.requestId,
+      ])
+    ).rows[0]?.reason,
+  ).toBe(reason);
+});
+
+test('runtime and public roles cannot provision operators or write audit receipts', async () => {
+  const id = await verifiedOperatorCandidate();
+  const sql = prepareOperatorStatusChange(operatorRequest(id));
+  await expect(database.pool.query(sql)).rejects.toMatchObject({ code: '42501' });
+  for (const role of ['hunter_runtime', 'anon', 'authenticated', 'service_role']) {
+    const privileges = await owner.query(
+      `SELECT has_function_privilege($1, 'ops.set_operator_status(uuid,uuid,text,text,text)', 'EXECUTE') AS execute,
+        has_function_privilege($1, 'ops.set_operator_status_by_email(text,text,text,text,uuid)', 'EXECUTE') AS email_execute,
+        has_table_privilege($1, 'ops.operator_access_changes', 'INSERT') AS insert`,
+      [role],
+    );
+    expect(privileges.rows).toEqual([{ execute: false, email_execute: false, insert: false }]);
+  }
+  await expect(database.pool.query('SELECT ops.set_operator_status_by_email($1, $2, $3, $4)', [`${id}@example.test`, 'active', 'runtime', 'Self promotion'])).rejects.toMatchObject({ code: '42501' });
 });

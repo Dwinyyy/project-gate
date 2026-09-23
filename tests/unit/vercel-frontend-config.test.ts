@@ -45,6 +45,24 @@ describe('Vercel frontend configuration', () => {
     ]);
   });
 
+  it('routes the embedded operator entry separately from the player SPA', () => {
+    const config = createVercelFrontendConfig('https://hunter-api.onrender.com', {
+      embeddedOperator: true,
+    });
+    expect(config.rewrites).toEqual([
+      {
+        source: '/v1/:path*',
+        destination: 'https://hunter-api.onrender.com/v1/:path*',
+      },
+      { source: '/operator', destination: '/operator/index.html' },
+      {
+        source: '/operator/:path((?!assets(?:/|$)).*)',
+        destination: '/operator/index.html',
+      },
+      { source: '/:path((?!v1(?:/|$)|operator(?:/|$)).*)', destination: '/index.html' },
+    ]);
+  });
+
   it.each([
     'http://api.hunter.example',
     'https://api.hunter.example/base',
@@ -70,7 +88,10 @@ describe('Vercel frontend configuration', () => {
       outputDirectory: 'dist',
     });
     expect(config.rewrites?.at(-1)).toEqual({
-      source: '/:path((?!v1(?:/|$)).*)',
+      source:
+        _name === 'player'
+          ? '/:path((?!v1(?:/|$)|operator(?:/|$)).*)'
+          : '/:path((?!v1(?:/|$)).*)',
       destination: '/index.html',
     });
   });
@@ -91,6 +112,6 @@ describe('Vercel frontend configuration', () => {
     // @vercel/config 0.7.0 wraps Vercel's documented named `config` export.
     const config = compiled.config ?? compiled;
 
-    expect(config.rewrites).toHaveLength(1);
+    expect(config.rewrites).toHaveLength(app === 'player' ? 3 : 1);
   });
 });

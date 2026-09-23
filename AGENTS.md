@@ -25,9 +25,15 @@ Read `docs/plans/master-blueprint.md`, `docs/tasks/ledger.md` (or the task regis
 - Use strict types, small domain modules, focused invariant/concurrency tests, relevant builds and fresh verification before success claims.
 - Do not manually edit production balances or ownership. Use permissioned, attributable reconciliation.
 - Keep precise location and hidden content out of fixtures, logs, public docs and source maps.
-- Use Context7: resolve-library-id then query-docs for current library/SDK/CLI/service documentation. Use primary docs if no matching library exists.
+- Apply the External Documentation Policy in `~/.codex/AGENTS.md`: use Context7 when external API behavior affects implementation and current/version-specific docs would materially improve correctness. Check installed versions first when possible, prefer matching docs, and reuse retrieved documentation. Skip internal logic, simple edits, repository exploration and clearly established project patterns. When needed, resolve-library-id then query-docs; use primary docs if no matching library exists. API documentation does not override project architecture or conventions.
 - Inspect existing code before editing, preserve completed work, and update ADRs when behavior changes.
 - Shared contracts and SQL migrations have one integration owner; coordinate before parallel changes.
 - Never infer deployed, authenticated, multiplayer, mobile or production-ready status from a rendered shell or passing unit tests.
 
 Execution began on codex/foundation. The workspace was empty, with no commit to base a worktree on. Work happens in the existing project directory; no unrelated checkout is modified.
+
+## Quality-first execution
+
+Apply the personal model-routing policy in `~/.codex/AGENTS.md` and reusable roles in `~/.codex/agents/`. The parent defaults to GPT-6 Astra High; GPT-6 Sol handles substantial development, GPT-5.6 Sol handles focused frontend/design work, and GPT-6 Luna handles bounded routine work and verification. Escalate delegated Astra reasoning with evidence; never invoke Ultra without explicit problem-specific authorization. A task's size alone does not justify escalation.
+
+Keep the original request, intended player/operator experience, acceptance criteria and applicable brief/blueprint constraints attached to every meaningful handoff. Before completion, verify the requested behavior, obtain independent Sol review for meaningful changes, repair substantive findings, and rerun relevant checks. Do not advance the ledger on compilation alone. Preserve one integration owner for shared contracts and SQL migrations.

@@ -3,6 +3,7 @@ import {
   AuthActionError,
   createBrowserAuthController,
   getOperatorSession,
+  getSelfSession,
   type AuthController,
   type AuthSnapshot,
   type TotpEnrollment,
@@ -28,6 +29,7 @@ export interface OperatorAuthModel {
   signIn(email: string, password: string): Promise<void>;
   beginEnrollment(): Promise<void>;
   verify(code: string): Promise<void>;
+  retryVerification(): void;
   signOut(): Promise<void>;
 }
 
@@ -84,6 +86,7 @@ export function useOperatorAuth(): OperatorAuthModel {
   const [error, setError] = useState<string | null>(null);
   const processedToken = useRef<string | null>(null);
   const revision = useRef(0);
+  const [verificationAttempt, setVerificationAttempt] = useState(0);
   const authPhase = auth.phase;
   const accessToken = auth.accessToken;
   const authError = auth.error;
@@ -155,9 +158,14 @@ export function useOperatorAuth(): OperatorAuthModel {
     const operation = ++revision.current;
     setError(null);
     setView({ phase: 'authorization-check' });
-    void controller
-      .getMfaStatus()
-      .then(async (status) => {
+    void getSelfSession(token)
+      .then(async (self) => {
+        if (operation !== revision.current) return;
+        if (self.authUserId !== authUserId || self.applicationRole !== 'operator' || !self.emailVerified) {
+          setView({ phase: 'denied', message: 'This account has no current operator assignment.' });
+          return;
+        }
+        const status = await controller.getMfaStatus();
         if (operation !== revision.current) return;
         if (status.assurance === 'unenrolled') {
           setView({ phase: 'mfa-enrollment', enrollment: null });
@@ -188,13 +196,20 @@ export function useOperatorAuth(): OperatorAuthModel {
       })
       .catch((cause: unknown) => {
         if (operation !== revision.current) return;
-        if (cause instanceof AuthActionError && cause.code === 'operator_access_denied') {
+        if (cause instanceof AuthActionError &&
+            ['operator_access_denied', 'password_sign_in_required', 'password_update_required', 'unauthenticated'].includes(cause.code)) {
           setView({ phase: 'denied', message: cause.message });
           return;
         }
         setView({ phase: 'unavailable', message: safeActionMessage(cause) });
       });
-  }, [accessToken, authError, authPhase, authUserId, controller]);
+  }, [accessToken, authError, authPhase, authUserId, controller, verificationAttempt]);
+
+  const retryVerification = useCallback(() => {
+    revision.current += 1;
+    processedToken.current = null;
+    setVerificationAttempt((attempt) => attempt + 1);
+  }, []);
 
   const signIn = useCallback(
     async (email: string, password: string) => {
@@ -215,6 +230,7 @@ export function useOperatorAuth(): OperatorAuthModel {
   );
 
   const beginEnrollment = useCallback(async () => {
+    const originatingToken = controller?.getSnapshot().accessToken;
     setBusy(true);
     setError(null);
     try {
@@ -222,8 +238,10 @@ export function useOperatorAuth(): OperatorAuthModel {
         throw new AuthActionError('unavailable', 'Operator authentication is unavailable.');
       }
       const enrollment = await controller.enrollTotp();
+      if (controller.getSnapshot().accessToken !== originatingToken) return;
       setView({ phase: 'mfa-enrollment', enrollment });
     } catch (cause) {
+      if (controller?.getSnapshot().accessToken !== originatingToken) return;
       setView({ phase: 'mfa-enrollment', enrollment: null });
       setError(safeActionMessage(cause));
     } finally {
@@ -233,6 +251,7 @@ export function useOperatorAuth(): OperatorAuthModel {
 
   const verify = useCallback(
     async (code: string) => {
+      const originatingToken = controller?.getSnapshot().accessToken;
       const factorId =
         view.phase === 'mfa-enrollment'
           ? view.enrollment?.factorId
@@ -249,8 +268,8 @@ export function useOperatorAuth(): OperatorAuthModel {
           );
         }
         await controller.verifyTotp(factorId, code);
-        setView({ phase: 'authorization-check' });
       } catch (cause) {
+        if (controller?.getSnapshot().accessToken !== originatingToken) return;
         if (factorId) setView({ phase: 'mfa-challenge', factorId });
         setError(safeActionMessage(cause));
       } finally {
@@ -286,6 +305,7 @@ export function useOperatorAuth(): OperatorAuthModel {
     signIn,
     beginEnrollment,
     verify,
+    retryVerification,
     signOut,
   };
 }

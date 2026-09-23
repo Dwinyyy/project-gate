@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { routes, type VercelConfig } from '@vercel/config/v1';
 
 const apiProxySource = '/v1/:path*';
-const spaFallbackSource = '/:path((?!v1(?:/|$)).*)';
+const spaFallbackSource = '/:path((?!v1(?:/|$)|operator(?:/|$)).*)';
 
 function normalizeApiOrigin(value: string | undefined): string | undefined {
   const candidate = value?.trim();
@@ -46,7 +46,10 @@ function normalizeApiOrigin(value: string | undefined): string | undefined {
   return url.origin;
 }
 
-export function createVercelFrontendConfig(apiOriginValue: string | undefined): VercelConfig {
+export function createVercelFrontendConfig(
+  apiOriginValue: string | undefined,
+  options: { embeddedOperator?: boolean } = {},
+): VercelConfig {
   const apiOrigin = normalizeApiOrigin(apiOriginValue);
   const apiRewrites = apiOrigin ? [routes.rewrite(apiProxySource, `${apiOrigin}/v1/:path*`)] : [];
 
@@ -54,6 +57,15 @@ export function createVercelFrontendConfig(apiOriginValue: string | undefined): 
     framework: 'vite',
     buildCommand: 'pnpm run build',
     outputDirectory: 'dist',
-    rewrites: [...apiRewrites, routes.rewrite(spaFallbackSource, '/index.html')],
+    rewrites: [
+      ...apiRewrites,
+      ...(options.embeddedOperator
+        ? [
+            routes.rewrite('/operator', '/operator/index.html'),
+            routes.rewrite('/operator/:path((?!assets(?:/|$)).*)', '/operator/index.html'),
+          ]
+        : []),
+      routes.rewrite(options.embeddedOperator ? spaFallbackSource : '/:path((?!v1(?:/|$)).*)', '/index.html'),
+    ],
   };
 }

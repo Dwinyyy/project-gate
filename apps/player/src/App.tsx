@@ -320,7 +320,7 @@ function NotFoundScreen() {
 
 export function App() {
   const location = useLocation();
-  const { auth } = useAccountAuth();
+  const { auth, validation, session, validationError } = useAccountAuth();
   const mainRef = useRef<HTMLElement>(null);
   const previousPath = useRef(location.pathname);
   const currentTitle =
@@ -338,8 +338,36 @@ export function App() {
     }
   }, [currentTitle, location.pathname]);
 
+  useEffect(() => {
+    if (auth.phase === 'authenticated' && validation === 'valid' && session?.applicationRole === 'operator') {
+      window.location.replace('/operator/');
+    }
+  }, [auth.phase, validation, session?.applicationRole]);
+
   if (auth.phase === 'recovery' && location.pathname !== '/account/recovery') {
     return <Navigate to="/account/recovery" replace />;
+  }
+
+  if (auth.phase === 'authenticated' && validation === 'valid' && session?.applicationRole === 'operator') {
+    return <p role="status">Opening the operator workspace…</p>;
+  }
+
+  if (auth.phase === 'authenticated' && validation !== 'valid') {
+    return (
+      <main className={styles.previewStage}>
+        <section className={styles.accountPanel} aria-live="polite">
+          <h1>{validation === 'checking' ? 'Checking your account…' : 'Account verification unavailable.'}</h1>
+          {validation === 'invalid' ? (
+            <>
+              <p>{validationError ?? 'The account session could not be verified.'}</p>
+              <button className={styles.accountPrimaryButton} type="button" onClick={() => window.location.reload()}>
+                Retry verification
+              </button>
+            </>
+          ) : null}
+        </section>
+      </main>
+    );
   }
 
   return (

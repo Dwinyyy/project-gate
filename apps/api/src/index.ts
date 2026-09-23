@@ -26,6 +26,7 @@ async function main() {
       : undefined;
   const app = buildApp({
     logger: true,
+    ...(environment.revision ? { revision: environment.revision } : {}),
     ...(database ? { database } : {}),
     ...(auth ? { auth } : {}),
     ...(database ? { operators: createOperatorAccessStore(database.pool) } : {}),

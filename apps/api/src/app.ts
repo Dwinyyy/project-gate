@@ -22,6 +22,7 @@ export interface ApiOptions {
   database?: { ready(): Promise<boolean> };
   auth?: { publicConfig: AuthConfig; verifier: AuthVerifier };
   operators?: OperatorAccessStore;
+  revision?: string;
 }
 
 function bearerToken(authorization: string | undefined): string | null {
@@ -73,6 +74,7 @@ export function buildApp(options: ApiOptions = {}) {
   app.register(swagger, { openapi: { info: { title: 'Hunter World API', version: '0.1.0' } } });
   app.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id).header('cache-control', 'no-store');
+    if (options.revision) reply.header('x-hunter-revision', options.revision);
   });
   app.setErrorHandler((error, request, reply) => {
     const statusCode =
@@ -133,7 +135,7 @@ export function buildApp(options: ApiOptions = {}) {
       },
     },
     async (request, reply) => {
-      if (!options.auth) {
+      if (!options.auth || !options.operators) {
         return reply.code(503).send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
       }
       const verified = await verifyStandardIdentity(
@@ -154,12 +156,19 @@ export function buildApp(options: ApiOptions = {}) {
           .send({ error: { code: 'PASSWORD_SIGN_IN_REQUIRED', requestId: request.id } });
       }
       const identity = verified.identity;
+      let operator;
+      try {
+        operator = await options.operators.findActiveOperator(identity.authUserId);
+      } catch {
+        return reply.code(503).send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
+      }
       const session: SelfSession = {
         authUserId: identity.authUserId,
         email: identity.email,
         emailVerified: identity.emailVerified,
         sessionId: identity.sessionId,
         aal: identity.aal,
+        applicationRole: operator ? 'operator' : 'player',
       };
       return reply.code(200).send(session);
     },
@@ -203,13 +212,23 @@ export function buildApp(options: ApiOptions = {}) {
           .send({ error: { code: 'PASSWORD_SIGN_IN_REQUIRED', requestId: request.id } });
       }
       const identity = verified.identity;
-      const operator = await options.operators.findActiveOperator(identity.authUserId);
+      let operator;
+      try {
+        operator = await options.operators.findActiveOperator(identity.authUserId);
+      } catch {
+        return reply.code(503).send({ error: { code: 'OPERATOR_AUTH_UNAVAILABLE', requestId: request.id } });
+      }
       if (!operator) {
         return reply
           .code(403)
           .send({ error: { code: 'OPERATOR_ACCESS_DENIED', requestId: request.id } });
       }
-      if (identity.aal !== 'aal2') {
+      if (!identity.emailVerified) {
+        return reply
+          .code(403)
+          .send({ error: { code: 'OPERATOR_ACCESS_DENIED', requestId: request.id } });
+      }
+      if (identity.aal !== 'aal2' || !identity.hasVerifiedTotp || !identity.totpAuthenticated) {
         return reply.code(403).send({ error: { code: 'MFA_REQUIRED', requestId: request.id } });
       }
       const session: OperatorSession = {

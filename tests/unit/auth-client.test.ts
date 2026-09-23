@@ -22,8 +22,17 @@ function accessToken(amr: unknown): string {
 function session(
   accessToken: string,
   accessMode: 'standard' | 'recovery' | 'restricted' = 'standard',
+  sessionUser = user,
 ): AuthBackendSession {
-  return { accessToken, user, accessMode };
+  return { accessToken, user: sessionUser, accessMode };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 class MemoryAuthBackend implements AuthBackend {
@@ -83,7 +92,7 @@ class MemoryAuthBackend implements AuthBackend {
     return { data: undefined, error: null };
   }
 
-  async updatePassword(password: string) {
+  async updatePassword(password: string): ReturnType<AuthBackend['updatePassword']> {
     return password === 'replacement-password'
       ? { data: undefined, error: null }
       : { data: undefined, error: { code: 'weak_password', message: 'weak' } };
@@ -94,7 +103,7 @@ class MemoryAuthBackend implements AuthBackend {
     return { data: this.currentSession, error: null };
   }
 
-  async getMfaState() {
+  async getMfaState(): ReturnType<AuthBackend['getMfaState']> {
     return {
       data: { currentLevel: this.assurance, verifiedTotpFactorIds: this.verifiedFactorIds },
       error: null,
@@ -113,12 +122,15 @@ class MemoryAuthBackend implements AuthBackend {
     };
   }
 
-  async verifyTotp(input: { factorId: string; code: string }) {
+  async verifyTotp(input: { factorId: string; code: string }): ReturnType<AuthBackend['verifyTotp']> {
     if (input.factorId !== 'factor-1' || input.code !== '123456') {
       return { data: null, error: { code: 'invalid_mfa_code', message: 'invalid' } };
     }
     this.assurance = 'aal2';
-    this.currentSession = session('aal2-token');
+    this.currentSession = session(
+      'aal2-token',
+      this.currentSession?.accessMode === 'recovery' ? 'recovery' : 'standard',
+    );
     return { data: this.currentSession, error: null };
   }
 
@@ -231,7 +243,7 @@ describe('browser Auth controller', () => {
     });
   });
 
-  it('allows password replacement only from recovery and blocks MFA operations there', async () => {
+  it('allows password replacement only from recovery and blocks operator MFA operations there', async () => {
     const standardBackend = new MemoryAuthBackend();
     standardBackend.currentSession = session('standard-token');
     const standardController = createAuthControllerForBackend(standardBackend);
@@ -255,6 +267,215 @@ describe('browser Auth controller', () => {
     await expect(recoveryController.verifyTotp('factor-1', '123456')).rejects.toMatchObject({
       code: 'password_update_required',
     });
+  });
+
+  it('requires an enrolled recovery factor before password replacement and stays recovery-only after verification', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-token', 'recovery');
+    backend.verifiedFactorIds = ['factor-1'];
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.getRecoveryMfaStatus()).resolves.toEqual({
+      assurance: 'aal1',
+      verifiedTotpFactorIds: ['factor-1'],
+    });
+    await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'mfa_required',
+    });
+    await expect(controller.verifyRecoveryTotp('factor-1', '12x')).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+
+    await controller.verifyRecoveryTotp('factor-1', '123456');
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'recovery',
+      accessToken: 'aal2-token',
+    });
+    await expect(controller.getRecoveryMfaStatus()).resolves.toEqual({
+      assurance: 'aal2',
+      verifiedTotpFactorIds: ['factor-1'],
+    });
+
+    backend.emit('TOKEN_REFRESHED', session('refreshed-aal2-recovery', 'recovery'));
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'recovery',
+      accessToken: 'refreshed-aal2-recovery',
+    });
+    await controller.updatePassword('replacement-password');
+    expect(controller.getSnapshot().phase).toBe('anonymous');
+  });
+
+  it('keeps password-only recovery unchanged when no verified factor exists', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-token', 'recovery');
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.getRecoveryMfaStatus()).resolves.toEqual({
+      assurance: 'unenrolled',
+      verifiedTotpFactorIds: [],
+    });
+    await controller.updatePassword('replacement-password');
+    expect(backend.signOutScopes).toEqual(['global']);
+  });
+
+  it('fails closed if an MFA verification response loses the recovery marker', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-token', 'recovery');
+    backend.verifiedFactorIds = ['factor-1'];
+    backend.verifyTotp = async () => {
+      backend.assurance = 'aal2';
+      return { data: session('unexpected-standard-token'), error: null };
+    };
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.verifyRecoveryTotp('factor-1', '123456')).rejects.toMatchObject({
+      code: 'expired_link',
+    });
+    expect(backend.signOutScopes).toEqual(['global']);
+    expect(controller.getSnapshot().phase).toBe('anonymous');
+  });
+
+  it('keeps recovery locked when an enrolled factor becomes stale before verification', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-token', 'recovery');
+    backend.verifiedFactorIds = ['factor-1'];
+    backend.verifyTotp = async () => ({
+      data: null,
+      error: { code: 'factor_not_found', message: 'private factor detail' },
+    });
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    await expect(controller.verifyRecoveryTotp('factor-1', '123456')).rejects.toMatchObject({
+      code: 'unavailable',
+      message: 'Account access is unavailable. Try again shortly.',
+    });
+    expect(controller.getSnapshot().phase).toBe('recovery');
+    await expect(controller.updatePassword('replacement-password')).rejects.toMatchObject({
+      code: 'mfa_required',
+    });
+  });
+
+  it('does not update a replacement account when the recovery session changes during the MFA check', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    const mfaState = deferred<Awaited<ReturnType<AuthBackend['getMfaState']>>>();
+    backend.getMfaState = () => mfaState.promise;
+    let updatedUserId: string | null = null;
+    backend.updatePassword = async () => {
+      updatedUserId = backend.currentSession?.user.id ?? null;
+      return { data: undefined, error: null };
+    };
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    const update = controller.updatePassword('replacement-password');
+    const replacementUser = {
+      id: '22222222-2222-4222-8222-222222222222',
+      email: 'replacement@example.test',
+    };
+    backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    mfaState.resolve({
+      data: { currentLevel: 'aal1', verifiedTotpFactorIds: [] },
+      error: null,
+    });
+
+    await expect(update).rejects.toMatchObject({ code: 'recovery_required' });
+    expect(updatedUserId).toBeNull();
+    expect(backend.signOutScopes).toEqual([]);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+      accessToken: 'standard-b',
+    });
+  });
+
+  it('does not sign out a replacement account when recovery changes during the password update', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    const passwordUpdate = deferred<AuthBackendResult<void>>();
+    const updateStarted = deferred<void>();
+    backend.updatePassword = () => {
+      updateStarted.resolve();
+      return passwordUpdate.promise;
+    };
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    const update = controller.updatePassword('replacement-password');
+    await updateStarted.promise;
+    const replacementUser = {
+      id: '22222222-2222-4222-8222-222222222222',
+      email: 'replacement@example.test',
+    };
+    backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    passwordUpdate.resolve({ data: undefined, error: null });
+
+    await expect(update).rejects.toMatchObject({ code: 'sign_out_incomplete' });
+    expect(backend.signOutScopes).toEqual([]);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+      accessToken: 'standard-b',
+    });
+  });
+
+  it('quarantines a late MFA completion without replacing or signing out a newer account', async () => {
+    const backend = new MemoryAuthBackend();
+    const recoveryA = session('recovery-a', 'recovery');
+    backend.currentSession = recoveryA;
+    backend.verifiedFactorIds = ['factor-1'];
+    const verification = deferred<Awaited<ReturnType<AuthBackend['verifyTotp']>>>();
+    backend.verifyTotp = () => verification.promise;
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    const pending = controller.verifyRecoveryTotp('factor-1', '123456');
+    const replacementUser = {
+      id: '22222222-2222-4222-8222-222222222222',
+      email: 'replacement@example.test',
+    };
+    backend.emit('SIGNED_OUT', null);
+    backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    const lateRecoveryA = session('recovery-a-aal2', 'recovery');
+    backend.emit('MFA_CHALLENGE_VERIFIED', lateRecoveryA);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+      accessToken: 'standard-b',
+    });
+    verification.resolve({ data: lateRecoveryA, error: null });
+
+    await expect(pending).rejects.toMatchObject({ code: 'recovery_required' });
+    expect(backend.signOutScopes).toEqual([]);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+      accessToken: 'standard-b',
+    });
+  });
+
+  it('allows an in-flight MFA check to continue across a same-account recovery refresh', async () => {
+    const backend = new MemoryAuthBackend();
+    backend.currentSession = session('recovery-a', 'recovery');
+    const mfaState = deferred<Awaited<ReturnType<AuthBackend['getMfaState']>>>();
+    backend.getMfaState = () => mfaState.promise;
+    const controller = createAuthControllerForBackend(backend);
+    await controller.ready();
+
+    const update = controller.updatePassword('replacement-password');
+    backend.emit('TOKEN_REFRESHED', session('recovery-a-refreshed', 'recovery'));
+    mfaState.resolve({
+      data: { currentLevel: 'aal1', verifiedTotpFactorIds: [] },
+      error: null,
+    });
+
+    await expect(update).resolves.toBeUndefined();
+    expect(backend.signOutScopes).toEqual(['global']);
+    expect(controller.getSnapshot().phase).toBe('anonymous');
   });
 
   it('enforces local password and TOTP input boundaries before provider work', async () => {
@@ -405,6 +626,7 @@ describe('Auth HTTP boundaries', () => {
           emailVerified: true,
           sessionId: '22222222-2222-4222-8222-222222222222',
           aal: 'aal2',
+          applicationRole: 'operator',
         });
       }
       return Response.json({
@@ -417,6 +639,7 @@ describe('Auth HTTP boundaries', () => {
     await expect(getSelfSession('access-token', sessionFetch)).resolves.toMatchObject({
       authUserId: user.id,
       emailVerified: true,
+      applicationRole: 'operator',
     });
     await expect(getOperatorSession('access-token', sessionFetch)).resolves.toEqual({
       authUserId: user.id,
@@ -433,11 +656,18 @@ describe('Auth HTTP boundaries', () => {
         emailVerified: true,
         sessionId: null,
         aal: 'aal1',
+        applicationRole: 'player',
         provider_metadata: { role: 'untrusted' },
       })) as typeof fetch;
     await expect(getSelfSession('access-token', selfWithPrivateField)).rejects.toMatchObject({
       code: 'unavailable',
     });
+
+    const invalidRole = (async () => Response.json({
+      authUserId: user.id, email: user.email, emailVerified: true,
+      sessionId: null, aal: 'aal1', applicationRole: 'admin',
+    })) as typeof fetch;
+    await expect(getSelfSession('access-token', invalidRole)).rejects.toMatchObject({ code: 'unavailable' });
 
     const invalidPermission = (async () =>
       Response.json({

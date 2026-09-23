@@ -1906,7 +1906,7 @@ Persist these as project instructions:
 26. Never manually patch production balances or ownership; use audited recovery commands.
 27. Do not use production secrets, player data, or precise location histories in fixtures.
 28. Update documentation, acceptance mapping, and the task ledger when behavior changes.
-29. Use current Context7/official documentation for library, SDK, CLI, and service-specific work.
+29. Follow the External Documentation Policy in `AGENTS.md`: use Context7/official documentation when external API behavior affects implementation and current/version-specific guidance materially improves correctness; prefer installed-version docs, reuse retrieved guidance, and preserve project architecture and conventions.
 30. Coordinate shared schemas and contracts before parallel agents modify dependent systems.
 
 **Task handoff format:** objective, prerequisites, owned modules, consumed/produced contracts, migration impact, acceptance cases, verification commands, and completion evidence.
@@ -1969,4 +1969,3 @@ Execute these in order:
 
 10. **2.3 — Implement transactional character creation.**  
     Verify concurrent creation, cooldown denial, unawakened start, and reliable retrieval of the resulting identity.
-

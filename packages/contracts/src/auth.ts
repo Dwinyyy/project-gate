@@ -15,13 +15,14 @@ export type AuthConfig = FromSchema<typeof authConfigSchema>;
 export const selfSessionSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['authUserId', 'email', 'emailVerified', 'sessionId', 'aal'],
+  required: ['authUserId', 'email', 'emailVerified', 'sessionId', 'aal', 'applicationRole'],
   properties: {
     authUserId: { type: 'string', format: 'uuid' },
     email: { type: ['string', 'null'], format: 'email' },
     emailVerified: { type: 'boolean' },
     sessionId: { type: ['string', 'null'], format: 'uuid' },
     aal: { enum: ['aal1', 'aal2'] },
+    applicationRole: { enum: ['player', 'operator'] },
   },
 } as const;
 

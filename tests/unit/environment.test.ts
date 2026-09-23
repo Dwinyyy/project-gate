@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { parseEnvironment } from '../../packages/server/src/environment.js';
 
 describe('server environment', () => {
+  it('accepts only the platform Git commit as optional deployment evidence', () => {
+    const revision = 'a'.repeat(40);
+    expect(parseEnvironment({ RENDER_GIT_COMMIT: revision })).toHaveProperty('revision', revision);
+    expect(parseEnvironment({})).not.toHaveProperty('revision');
+    expect(() => parseEnvironment({ RENDER_GIT_COMMIT: 'not-a-commit-or-a-secret' })).toThrow(
+      'RENDER_GIT_COMMIT',
+    );
+  });
   it('defaults to a loopback foundation without claiming database availability', () => {
     const env = parseEnvironment({});
     expect(env).toMatchObject({ nodeEnv: 'development', host: '127.0.0.1', port: 3001 });

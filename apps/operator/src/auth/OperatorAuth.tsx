@@ -31,8 +31,8 @@ function SignIn({ auth }: { auth: OperatorAuthModel }) {
       <StatusBadge tone="warning">Operator access locked</StatusBadge>
       <h1 id="access-title">Operator sign in.</h1>
       <p className={styles.description}>
-        Use the provisioned account for this workspace. Operator registration is never available
-        here.
+        Sign in with the account assigned by the project owner. Registration is available on the
+        main site.
       </p>
       <form className={styles.authForm} onSubmit={submit} noValidate>
         <label htmlFor="operator-email">Operator email</label>
@@ -166,6 +166,16 @@ function BoundaryState({ auth }: { auth: OperatorAuthModel }) {
       </p>
       {!checking ? (
         <div className={styles.sessionAction}>
+          {auth.view.phase === 'unavailable' && auth.email ? (
+            <button
+              className={styles.primaryButton}
+              type="button"
+              onClick={auth.retryVerification}
+              disabled={auth.busy}
+            >
+              Retry verification
+            </button>
+          ) : null}
           <SignOutButton auth={auth} />
         </div>
       ) : null}
