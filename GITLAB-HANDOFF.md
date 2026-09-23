@@ -31,6 +31,24 @@ Codex stopped only because its usage limit was reached. The project was not nece
 
 GitLab Duo is temporarily taking over development.
 
+## Reasoning and Quality Standard
+
+Use deep, deliberate reasoning for architectural decisions, debugging, security-sensitive work, migrations, concurrency/session-state issues, and any change that could affect production behavior.
+
+Before modifying code:
+- inspect the relevant implementation and tests;
+- identify the actual root cause rather than guessing;
+- consider interactions with adjacent systems;
+- check whether the proposed change creates regressions or violates existing architecture.
+
+For difficult problems, spend additional effort investigating and validating before implementing.
+
+Prefer correctness and completeness over speed or minimal token usage.
+
+Do not stop at the first plausible fix. Verify assumptions with repository evidence, tests, and actual command results.
+
+For straightforward mechanical tasks, avoid unnecessary analysis and proceed efficiently.
+
 ## Instructions
 
 Before modifying anything:
