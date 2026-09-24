@@ -18,6 +18,10 @@ The player recovery interface offers password replacement or sign-out. A success
 
 These are Hunter World application boundaries, not restrictions on every direct Supabase account-management endpoint. Supabase still governs those endpoints and email-account compromise still permits password recovery. Global sign-out revokes refresh sessions; previously issued access-token lifetime/revocation follows provider policy. Do not promise instant invalidation of every bearer or that browser controls can stop direct provider requests.
 
+Browser operations bind MFA, password replacement and logout to the session that started them. An isolated nonpersisting provider client must not overwrite the primary session when its response arrives after another login. Promotion and cleanup compare the exact stored session under a shared browser lock; matching only the user ID is insufficient. Existing tabs running the older adapter must be reloaded after deployment before relying on this coordination protocol.
+
+Ordinary sign-out and cancelling recovery revoke the originating provider session with local scope. Password replacement retains global revocation of all refresh sessions for the originating user. A concurrent different-user login must survive both locally and at the provider. A newer same-user login is protected from stale browser storage replacement/cleanup, but its refresh session is intentionally revoked by password replacement's global sign-out. Local preservation is not a promise that global revocation exempts newer same-user sessions.
+
 ## Consequences and alternatives
 
 Operator MFA and least privilege are required; player offices never gain operator access. Recovery mode cannot enter the operator MFA flow, and an operator grant is activated only after its owner has enrolled and verified TOTP. Native refresh credentials use reviewed Keychain/Keystore-backed storage. Provider credentials and private content cannot enter player bundles.

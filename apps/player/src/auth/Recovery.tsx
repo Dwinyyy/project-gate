@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthActionError } from '@hunter-world/client';
 import { Icon } from '@hunter-world/ui';
@@ -11,7 +11,34 @@ function safeMessage(error: unknown): string {
     : 'Account recovery is unavailable. Try again shortly.';
 }
 
+function recoverySessionKey(accessToken: string | null): string {
+  if (!accessToken) return 'anonymous';
+  const payload = accessToken.split('.')[1];
+  if (!payload || !/^[A-Za-z0-9_-]+$/.test(payload)) return accessToken;
+  try {
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const claims: unknown = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')));
+    if (claims && typeof claims === 'object') {
+      const record = claims as Record<string, unknown>;
+      if (typeof record.sub === 'string' && typeof record.session_id === 'string') {
+        // This key only separates local form state. The provider and API still authorize actions.
+        return `${record.sub}:${record.session_id}`;
+      }
+    }
+  } catch {
+    // Malformed tokens still get an isolated form instance.
+  }
+  return accessToken;
+}
+
 export function Recovery() {
+  const { auth } = useAccountAuth();
+  const sessionKey = useRef(recoverySessionKey(auth.accessToken));
+  if (auth.accessToken) sessionKey.current = recoverySessionKey(auth.accessToken);
+  return <RecoverySession key={sessionKey.current} />;
+}
+
+function RecoverySession() {
   const { controller, auth } = useAccountAuth();
   const navigate = useNavigate();
   const changingPassword = auth.phase === 'recovery';
@@ -19,10 +46,15 @@ export function Recovery() {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [authenticatorCode, setAuthenticatorCode] = useState('');
-  const [mfaCheck, setMfaCheck] = useState<
+  const [mfaCheckState, setMfaCheck] = useState<
     | { phase: 'idle' | 'checking' | 'error' | 'password' }
     | { phase: 'challenge'; factorIds: string[]; factorId: string }
   >({ phase: 'idle' });
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const mfaCheck =
+    changingPassword && mfaToken !== auth.accessToken
+      ? ({ phase: 'checking' } as const)
+      : mfaCheckState;
   const [mfaCheckRevision, setMfaCheckRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -44,6 +76,7 @@ export function Recovery() {
       };
     }
     setMfaCheck({ phase: 'checking' });
+    setMfaToken(auth.accessToken);
     setError(null);
     void controller
       .getRecoveryMfaStatus()

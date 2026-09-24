@@ -89,9 +89,7 @@ describe('Vercel frontend configuration', () => {
     });
     expect(config.rewrites?.at(-1)).toEqual({
       source:
-        _name === 'player'
-          ? '/:path((?!v1(?:/|$)|operator(?:/|$)).*)'
-          : '/:path((?!v1(?:/|$)).*)',
+        _name === 'player' ? '/:path((?!v1(?:/|$)|operator(?:/|$)).*)' : '/:path((?!v1(?:/|$)).*)',
       destination: '/index.html',
     });
   });

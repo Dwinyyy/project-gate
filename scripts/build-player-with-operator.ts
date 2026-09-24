@@ -6,7 +6,9 @@ import { build } from 'vite';
 const operatorConfig = fileURLToPath(new URL('../apps/operator/vite.config.ts', import.meta.url));
 const playerConfig = fileURLToPath(new URL('../apps/player/vite.config.ts', import.meta.url));
 const appRoot = process.argv.includes('--app-root');
-const operatorOutput = fileURLToPath(new URL('../.cache/operator-embedded-build/', import.meta.url));
+const operatorOutput = fileURLToPath(
+  new URL('../.cache/operator-embedded-build/', import.meta.url),
+);
 const playerOutput = fileURLToPath(
   new URL(appRoot ? '../apps/player/dist/' : '../dist/player/', import.meta.url),
 );

@@ -216,7 +216,9 @@ export function buildApp(options: ApiOptions = {}) {
       try {
         operator = await options.operators.findActiveOperator(identity.authUserId);
       } catch {
-        return reply.code(503).send({ error: { code: 'OPERATOR_AUTH_UNAVAILABLE', requestId: request.id } });
+        return reply
+          .code(503)
+          .send({ error: { code: 'OPERATOR_AUTH_UNAVAILABLE', requestId: request.id } });
       }
       if (!operator) {
         return reply

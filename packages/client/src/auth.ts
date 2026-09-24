@@ -106,12 +106,13 @@ export interface AuthBackend {
 }
 
 export interface BoundAuthSession {
+  dispose?(): Promise<void>;
   isCurrent(): Promise<boolean>;
   getMfaState(): ReturnType<AuthBackend['getMfaState']>;
   enrollTotp(): ReturnType<AuthBackend['enrollTotp']>;
   verifyTotp(input: { factorId: string; code: string }): ReturnType<AuthBackend['verifyTotp']>;
   updatePassword(password: string): ReturnType<AuthBackend['updatePassword']>;
-  signOut(): ReturnType<AuthBackend['signOut']>;
+  signOut(scope?: 'global' | 'local'): ReturnType<AuthBackend['signOut']>;
   promote(): Promise<AuthBackendSession | null>;
   clear(): Promise<boolean>;
 }
@@ -343,7 +344,8 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       pendingRecoveryVerification &&
       (!recoveryIsCurrent(pendingRecoveryVerification) ||
         nextSession?.user.id !== pendingRecoveryVerification.userId)
-    ) return;
+    )
+      return;
     revision += 1;
     publishSession(nextSession, event === 'PASSWORD_RECOVERY', event === 'PASSWORD_RECOVERY');
   });
@@ -380,6 +382,7 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
     },
     ready: () => readyPromise,
     async signUp(email, password, redirectTo) {
+      await readyPromise;
       validatePassword(password);
       const result = await backend.signUp({
         email: normalizeEmail(email),
@@ -390,6 +393,7 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       return 'verification-required';
     },
     async signIn(email, password) {
+      await readyPromise;
       validatePassword(password);
       const nextSession = requireData(
         await backend.signIn({ email: normalizeEmail(email), password }),
@@ -397,6 +401,51 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       publishSession(nextSession);
     },
     async signOut() {
+      const origin = snapshot;
+      if (backend.beginBoundSession && (!origin.user || !origin.accessToken)) {
+        throw new AuthActionError(
+          'unauthenticated',
+          'There is no current account session to sign out.',
+        );
+      }
+      if (backend.beginBoundSession && origin.user && origin.accessToken) {
+        const bound = await backend.beginBoundSession({
+          accessToken: origin.accessToken,
+          user: origin.user,
+          accessMode:
+            origin.phase === 'recovery'
+              ? 'recovery'
+              : origin.phase === 'restricted'
+                ? 'restricted'
+                : 'standard',
+        });
+        try {
+          if (!(await bound.isCurrent())) {
+            throw new AuthActionError(
+              'unauthenticated',
+              'The account changed. Sign out from the current account instead.',
+            );
+          }
+          const result = await bound.signOut('local');
+          const cleared = await bound.clear();
+          if (cleared) publishSession(null);
+          if (result.error) {
+            throw new AuthActionError(
+              'sign_out_incomplete',
+              'This browser session was cleared, but provider sign-out could not be confirmed. Sign in again and retry if needed.',
+            );
+          }
+          if (!cleared) {
+            throw new AuthActionError(
+              'unauthenticated',
+              'The account changed while signing out. The newer session remains active.',
+            );
+          }
+          return;
+        } finally {
+          await bound.dispose?.();
+        }
+      }
       const result = await backend.signOut('global');
       if (result.error) throw actionError(result.error);
       publishSession(null);
@@ -418,111 +467,127 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
             accessMode: 'recovery',
           })
         : null;
-      const state = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
-      if (!recoveryIsCurrent(context)) throw recoveryChanged();
-      if (bound && !(await bound.isCurrent())) throw recoveryChanged();
-      if (state.assurance === 'aal1') {
-        throw new AuthActionError(
-          'mfa_required',
-          'Verify your authenticator code before choosing a new password.',
-        );
-      }
-      const updated = await (bound ?? backend).updatePassword(password);
-      if (updated.error) throw actionError(updated.error);
-      if (!bound && !recoveryIsCurrent(context)) {
-        throw new AuthActionError(
-          'sign_out_incomplete',
-          'Your password was updated, but the recovery session changed before global sign-out could be confirmed. Return to sign in with your new password, then retry signing out.',
-        );
-      }
-      const signedOut = bound ? await bound.signOut() : await backend.signOut('global');
-      if (signedOut.error) {
-        if (bound) {
-          // Match provider behavior: local recovery credentials are removed even when global
-          // revocation fails, but only while this tab still stores the originating session.
-          try {
-            if (await bound.clear()) publishSession(null);
-          } catch {
-            // The honest partial-failure report below still applies.
-          }
-        }
-        throw new AuthActionError(
-          'sign_out_incomplete',
-          'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
-        );
-      }
-      if (bound) {
-        if (!(await bound.clear())) {
-          // Another sign-in replaced the originating recovery session. Never sign it out.
+      try {
+        const state = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
+        if (!recoveryIsCurrent(context)) throw recoveryChanged();
+        if (bound && !(await bound.isCurrent())) throw recoveryChanged();
+        if (state.assurance === 'aal1') {
           throw new AuthActionError(
-            'recovery_required',
-            'Your password was updated and recovery sessions were signed out, but another account is now active in this browser. Sign in with your new password when you need it.',
+            'mfa_required',
+            'Verify your authenticator code before choosing a new password.',
           );
         }
-        // Publish the committed storage state now; the deferred reconciliation only confirms it.
-        publishSession(null);
-      } else {
-        publishSession(null);
+        const updated = await (bound ?? backend).updatePassword(password);
+        if (updated.error) throw actionError(updated.error);
+        if (!bound && !recoveryIsCurrent(context)) {
+          throw new AuthActionError(
+            'sign_out_incomplete',
+            'Your password was updated, but the recovery session changed before global sign-out could be confirmed. Return to sign in with your new password, then retry signing out.',
+          );
+        }
+        const signedOut = bound ? await bound.signOut() : await backend.signOut('global');
+        if (signedOut.error) {
+          if (bound) {
+            // Match provider behavior: local recovery credentials are removed even when global
+            // revocation fails, but only while this tab still stores the originating session.
+            try {
+              if (await bound.clear()) publishSession(null);
+            } catch {
+              // The honest partial-failure report below still applies.
+            }
+          }
+          throw new AuthActionError(
+            'sign_out_incomplete',
+            'Your password was updated, but signing out all sessions could not be confirmed. Return to sign in with your new password, then retry signing out.',
+          );
+        }
+        if (bound) {
+          if (!(await bound.clear())) {
+            // Another sign-in replaced the originating recovery session. Never sign it out.
+            throw new AuthActionError(
+              'recovery_required',
+              'Your password was updated and recovery sessions were signed out, but another account is now active in this browser. Sign in with your new password when you need it.',
+            );
+          }
+          // Publish the committed storage state now; the deferred reconciliation only confirms it.
+          publishSession(null);
+        } else {
+          publishSession(null);
+        }
+      } finally {
+        await bound?.dispose?.();
       }
     },
     async getRecoveryMfaStatus() {
       const context = recoveryContext();
       const bound = backend.beginBoundSession
         ? await backend.beginBoundSession({
-            accessToken: snapshot.accessToken!, user: snapshot.user!, accessMode: 'recovery',
+            accessToken: snapshot.accessToken!,
+            user: snapshot.user!,
+            accessMode: 'recovery',
           })
         : null;
-      const status = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
-      if (!recoveryIsCurrent(context)) throw recoveryChanged();
-      if (bound && !(await bound.isCurrent())) throw recoveryChanged();
-      return status;
+      try {
+        const status = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
+        if (!recoveryIsCurrent(context)) throw recoveryChanged();
+        if (bound && !(await bound.isCurrent())) throw recoveryChanged();
+        return status;
+      } finally {
+        await bound?.dispose?.();
+      }
     },
     async verifyRecoveryTotp(factorId, code) {
       const context = recoveryContext();
       validateTotp(factorId, code);
       const bound = backend.beginBoundSession
         ? await backend.beginBoundSession({
-            accessToken: snapshot.accessToken!, user: snapshot.user!, accessMode: 'recovery',
+            accessToken: snapshot.accessToken!,
+            user: snapshot.user!,
+            accessMode: 'recovery',
           })
         : null;
-      pendingRecoveryVerification = context;
-      let nextSession: AuthBackendSession;
       try {
-        nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
-      } finally {
-        pendingRecoveryVerification = null;
-      }
-      if (!recoveryIsCurrent(context)) {
-        if (
-          snapshot.user?.id === nextSession.user.id &&
-          snapshot.accessToken === nextSession.accessToken
-        ) {
-          await backend.signOut('global');
-          publishSession(null);
+        pendingRecoveryVerification = context;
+        let nextSession: AuthBackendSession;
+        try {
+          nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
+        } finally {
+          pendingRecoveryVerification = null;
         }
-        throw recoveryChanged();
-      }
-      if (nextSession.accessMode !== 'recovery') {
+        if (!recoveryIsCurrent(context)) {
+          if (
+            snapshot.user?.id === nextSession.user.id &&
+            snapshot.accessToken === nextSession.accessToken
+          ) {
+            await backend.signOut('global');
+            publishSession(null);
+          }
+          throw recoveryChanged();
+        }
+        if (nextSession.accessMode !== 'recovery') {
+          if (bound) {
+            // The bound client revokes only the originating account; storage is cleared only
+            // while it still holds that exact session.
+            await bound.signOut();
+            if (await bound.clear()) publishSession(null);
+          } else {
+            await backend.signOut('global');
+            publishSession(null);
+          }
+          throw new AuthActionError(
+            'expired_link',
+            'This recovery session could not be verified safely. Request a new recovery link.',
+          );
+        }
         if (bound) {
-          // The bound client revokes only the originating account; storage is cleared only
-          // while it still holds that exact session.
-          await bound.signOut();
-          if (await bound.clear()) publishSession(null);
-        } else {
-          await backend.signOut('global');
-          publishSession(null);
-        }
-        throw new AuthActionError(
-          'expired_link',
-          'This recovery session could not be verified safely. Request a new recovery link.',
-        );
+          const promoted = await bound.promote();
+          if (!promoted) throw recoveryChanged();
+          // Publish the committed storage state now; the deferred reconciliation only confirms it.
+          publishSession(promoted, true);
+        } else publishSession(nextSession, true);
+      } finally {
+        await bound?.dispose?.();
       }
-      if (bound) {
-        const promoted = await bound.promote();
-        if (!promoted) throw recoveryChanged();
-        // Publish the committed storage state now; the deferred reconciliation only confirms it.
-        publishSession(promoted, true);
-      } else publishSession(nextSession, true);
     },
     async getMfaStatus() {
       if (snapshot.phase === 'restricted') {
@@ -538,16 +603,26 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
         );
       }
       const origin = snapshot;
-      const bound = backend.beginBoundSession && origin.user && origin.accessToken
-        ? await backend.beginBoundSession({
-            accessToken: origin.accessToken, user: origin.user, accessMode: 'standard',
-          })
-        : null;
-      const result = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
-      if (bound && !(await bound.isCurrent())) {
-        throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+      const bound =
+        backend.beginBoundSession && origin.user && origin.accessToken
+          ? await backend.beginBoundSession({
+              accessToken: origin.accessToken,
+              user: origin.user,
+              accessMode: 'standard',
+            })
+          : null;
+      try {
+        const result = mfaStatus(requireData(await (bound ?? backend).getMfaState()));
+        if (bound && !(await bound.isCurrent())) {
+          throw new AuthActionError(
+            'unauthenticated',
+            'The account changed. Sign in again to continue.',
+          );
+        }
+        return result;
+      } finally {
+        await bound?.dispose?.();
       }
-      return result;
     },
     async enrollTotp() {
       if (snapshot.phase === 'restricted') {
@@ -563,21 +638,31 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
         );
       }
       const origin = snapshot;
-      const bound = backend.beginBoundSession && origin.user && origin.accessToken
-        ? await backend.beginBoundSession({
-            accessToken: origin.accessToken, user: origin.user, accessMode: 'standard',
-          })
-        : null;
-      const enrollment = requireData(await (bound ?? backend).enrollTotp());
-      if (bound && !(await bound.isCurrent())) {
-        throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+      const bound =
+        backend.beginBoundSession && origin.user && origin.accessToken
+          ? await backend.beginBoundSession({
+              accessToken: origin.accessToken,
+              user: origin.user,
+              accessMode: 'standard',
+            })
+          : null;
+      try {
+        const enrollment = requireData(await (bound ?? backend).enrollTotp());
+        if (bound && !(await bound.isCurrent())) {
+          throw new AuthActionError(
+            'unauthenticated',
+            'The account changed. Sign in again to continue.',
+          );
+        }
+        return {
+          ...enrollment,
+          qrCode: enrollment.qrCode.startsWith('data:')
+            ? enrollment.qrCode
+            : `data:image/svg+xml;utf-8,${encodeURIComponent(enrollment.qrCode)}`,
+        };
+      } finally {
+        await bound?.dispose?.();
       }
-      return {
-        ...enrollment,
-        qrCode: enrollment.qrCode.startsWith('data:')
-          ? enrollment.qrCode
-          : `data:image/svg+xml;utf-8,${encodeURIComponent(enrollment.qrCode)}`,
-      };
     },
     async verifyTotp(factorId, code) {
       if (snapshot.phase === 'restricted') {
@@ -594,23 +679,38 @@ export function createAuthControllerForBackend(backend: AuthBackend): AuthContro
       }
       validateTotp(factorId, code);
       const origin = snapshot;
-      const bound = backend.beginBoundSession && origin.user && origin.accessToken
-        ? await backend.beginBoundSession({
-            accessToken: origin.accessToken, user: origin.user, accessMode: 'standard',
-          })
-        : null;
-      const nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
-      if (bound) {
-        const promoted = await bound.promote();
-        if (!promoted) {
-          throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
-        }
-        publishSession(promoted);
-      } else if (
-        snapshot.user?.id === origin.user?.id &&
-        snapshot.accessToken === origin.accessToken
-      ) publishSession(nextSession);
-      else throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+      const bound =
+        backend.beginBoundSession && origin.user && origin.accessToken
+          ? await backend.beginBoundSession({
+              accessToken: origin.accessToken,
+              user: origin.user,
+              accessMode: 'standard',
+            })
+          : null;
+      try {
+        const nextSession = requireData(await (bound ?? backend).verifyTotp({ factorId, code }));
+        if (bound) {
+          const promoted = await bound.promote();
+          if (!promoted) {
+            throw new AuthActionError(
+              'unauthenticated',
+              'The account changed. Sign in again to continue.',
+            );
+          }
+          publishSession(promoted);
+        } else if (
+          snapshot.user?.id === origin.user?.id &&
+          snapshot.accessToken === origin.accessToken
+        )
+          publishSession(nextSession);
+        else
+          throw new AuthActionError(
+            'unauthenticated',
+            'The account changed. Sign in again to continue.',
+          );
+      } finally {
+        await bound?.dispose?.();
+      }
     },
     dispose() {
       if (disposed) return;
@@ -693,9 +793,11 @@ class BrowserSessionStore {
       const value = session as Record<string, unknown>;
       return typeof value.access_token === 'string' &&
         typeof value.refresh_token === 'string' &&
-        value.user && typeof value.user === 'object' &&
+        value.user &&
+        typeof value.user === 'object' &&
         typeof (value.user as Record<string, unknown>).id === 'string'
-        ? session as Session : null;
+        ? (session as Session)
+        : null;
     } catch {
       return null;
     }
@@ -709,36 +811,73 @@ class BrowserSessionStore {
     const origin = await this.exclusive(async () => {
       const raw = this.readRaw();
       const session = this.parsed(raw);
-      if (!session || !raw ||
+      if (
+        !session ||
+        !raw ||
         session.access_token !== expected.accessToken ||
         session.user.id !== expected.user.id ||
-        authAccessModeFromToken(session.access_token) !== expected.accessMode) return null;
+        authAccessModeFromToken(session.access_token) !== expected.accessMode
+      )
+        return null;
       return { raw, session };
     });
     if (!origin) {
-      throw new AuthActionError('unauthenticated', 'The account changed. Sign in again to continue.');
+      throw new AuthActionError(
+        'unauthenticated',
+        'The account changed. Sign in again to continue.',
+      );
     }
 
-    const privateClient = createClient(this.config.supabaseUrl, this.config.supabasePublishableKey, {
-      auth: {
-        storageKey: `${this.storageKey}-isolated-${++isolatedClientId}`,
-        flowType: 'pkce', autoRefreshToken: false,
-        detectSessionInUrl: false, persistSession: false,
+    const privateKey = `${this.storageKey}-isolated-${++isolatedClientId}`;
+    // The SDK's persistSession flag permits an injected store. This store lives only
+    // inside the bound client; it never touches browser storage or the primary key.
+    // GoTrueClient.__loadSession refreshes near-expiry tokens even with
+    // autoRefreshToken:false. Keep the captured bearer unchanged in the private
+    // client and let the provider reject an expired JWT. Never rotate a token
+    // that still belongs to the primary persistent session.
+    const privateSeed = {
+      ...origin.session,
+      expires_at: Number.MAX_SAFE_INTEGER,
+      expires_in: Number.MAX_SAFE_INTEGER,
+    };
+    const privateValues = new Map<string, string>([[privateKey, JSON.stringify(privateSeed)]]);
+    const privateClient = createClient(
+      this.config.supabaseUrl,
+      this.config.supabasePublishableKey,
+      {
+        auth: {
+          storageKey: privateKey,
+          storage: {
+            getItem: (key) => privateValues.get(key) ?? null,
+            setItem: (key, value) => {
+              privateValues.set(key, value);
+            },
+            removeItem: (key) => {
+              privateValues.delete(key);
+            },
+          },
+          flowType: 'pkce',
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+          persistSession: true,
+        },
+        global: { fetch: this.fetchAuth },
       },
-      global: { fetch: this.fetchAuth },
-    });
-    const seeded = await privateClient.auth.setSession({
-      access_token: origin.session.access_token,
-      refresh_token: origin.session.refresh_token,
-    });
+    );
+    const seeded = await privateClient.auth.getSession();
     const seededSession = backendSession(seeded.data.session);
-    if (seeded.error || !seededSession ||
+    if (
+      seeded.error ||
+      !seededSession ||
       seededSession.user.id !== expected.user.id ||
-      seededSession.accessMode !== expected.accessMode) {
+      seededSession.accessMode !== expected.accessMode
+    ) {
+      await privateClient.auth.dispose();
       throw new AuthActionError('unavailable', 'Account access is unavailable. Try again shortly.');
     }
 
     let revision = origin.raw;
+    let verifiedAccessToken: string | null = null;
     const sameRevision = () => this.exclusive(async () => this.readRaw() === revision);
     const exchange = async (next: Session | null) => {
       const exchanged = await this.exclusive(async () => {
@@ -756,25 +895,47 @@ class BrowserSessionStore {
       return exchanged;
     };
     return {
+      dispose: () => privateClient.auth.dispose(),
       isCurrent: sameRevision,
       getMfaState: () => supabaseMfaState(privateClient),
       enrollTotp: () => supabaseEnrollTotp(privateClient),
-      verifyTotp: (input) => supabaseVerifyTotp(privateClient, input),
+      verifyTotp: async (input) => {
+        const result = await supabaseVerifyTotp(privateClient, input);
+        verifiedAccessToken = result.data?.accessToken ?? null;
+        return result;
+      },
       async updatePassword(password) {
         const { data, error } = await privateClient.auth.updateUser({ password });
         return { data: data.user ? undefined : null, error: backendError(error) };
       },
-      async signOut() {
-        const { error } = await privateClient.auth.signOut({ scope: 'global' });
+      signOut: async (scope = 'global') => {
+        const current = this.parsed(privateValues.get(privateKey) ?? null);
+        if (!current) {
+          return {
+            data: undefined,
+            error: {
+              code: 'session_not_found',
+              message: 'The originating session is unavailable.',
+            },
+          };
+        }
+        // The high-level SDK signOut treats 401/403 as success. Preserve that error:
+        // an expired bearer does not prove the originating refresh session was revoked.
+        const { error } = await privateClient.auth.admin.signOut(current.access_token, scope);
         return { data: undefined, error: backendError(error) };
       },
-      async promote() {
-        const { data, error } = await privateClient.auth.getSession();
-        const next = data.session;
+      promote: async () => {
+        const next = this.parsed(privateValues.get(privateKey) ?? null);
         const projected = backendSession(next);
-        if (error || !next || !projected || projected.user.id !== expected.user.id ||
-          projected.accessMode !== expected.accessMode) return null;
-        return await exchange(next) ? projected : null;
+        if (
+          !next ||
+          !projected ||
+          projected.accessToken !== verifiedAccessToken ||
+          projected.user.id !== expected.user.id ||
+          projected.accessMode !== expected.accessMode
+        )
+          return null;
+        return (await exchange(next)) ? projected : null;
       },
       clear: () => exchange(null),
     };
@@ -797,13 +958,19 @@ async function supabaseMfaState(client: SupabaseClient): ReturnType<AuthBackend[
 
 async function supabaseEnrollTotp(client: SupabaseClient): ReturnType<AuthBackend['enrollTotp']> {
   const { data, error } = await client.auth.mfa.enroll({
-    factorType: 'totp', friendlyName: 'Hunter World Operator', issuer: 'Hunter World',
+    factorType: 'totp',
+    friendlyName: 'Hunter World Operator',
+    issuer: 'Hunter World',
   });
   return {
-    data: data ? {
-      factorId: data.id, qrCode: data.totp.qr_code,
-      secret: data.totp.secret, uri: data.totp.uri,
-    } : null,
+    data: data
+      ? {
+          factorId: data.id,
+          qrCode: data.totp.qr_code,
+          secret: data.totp.secret,
+          uri: data.totp.uri,
+        }
+      : null,
     error: backendError(error),
   };
 }
@@ -815,30 +982,38 @@ async function supabaseVerifyTotp(
   const { data, error } = await client.auth.mfa.challengeAndVerify(input);
   const accessMode = data ? authAccessModeFromToken(data.access_token) : null;
   return {
-    data: data && accessMode ? {
-      accessToken: data.access_token,
-      user: { id: data.user.id, email: data.user.email ?? null },
-      accessMode,
-    } : null,
+    data:
+      data && accessMode
+        ? {
+            accessToken: data.access_token,
+            user: { id: data.user.id, email: data.user.email ?? null },
+            accessMode,
+          }
+        : null,
     error: backendError(error),
   };
 }
 
 function createSupabaseBackend(client: SupabaseClient, browser?: BrowserSessionStore): AuthBackend {
-  const listeners = new Set<(event: AuthBackendEvent, session: AuthBackendSession | null) => void>();
+  const listeners = new Set<
+    (event: AuthBackendEvent, session: AuthBackendSession | null) => void
+  >();
   let reconcileGeneration = 0;
   const reconcile = () => {
     const generation = ++reconcileGeneration;
     // SDK callbacks may run under its lock. Reconciliation must leave that callback first.
     globalThis.setTimeout(() => {
       if (!browser) return;
-      void browser.current().then((session) => {
-        if (generation !== reconcileGeneration) return;
-        for (const listener of listeners) listener('TOKEN_REFRESHED', session);
-      }).catch(() => {
-        if (generation !== reconcileGeneration) return;
-        for (const listener of listeners) listener('SIGNED_OUT', null);
-      });
+      void browser
+        .current()
+        .then((session) => {
+          if (generation !== reconcileGeneration) return;
+          for (const listener of listeners) listener('TOKEN_REFRESHED', session);
+        })
+        .catch(() => {
+          if (generation !== reconcileGeneration) return;
+          for (const listener of listeners) listener('SIGNED_OUT', null);
+        });
     }, 0);
   };
   return {
@@ -863,14 +1038,19 @@ function createSupabaseBackend(client: SupabaseClient, browser?: BrowserSessionS
       };
     },
     async signUp(input) {
-      const { data, error } = await (browser ? browser.exclusive(() => client.auth.signUp({
-        email: input.email,
-        password: input.password,
-        options: { emailRedirectTo: input.redirectTo },
-      })) : client.auth.signUp({
-        email: input.email, password: input.password,
-        options: { emailRedirectTo: input.redirectTo },
-      }));
+      const { data, error } = await (browser
+        ? browser.exclusive(() =>
+            client.auth.signUp({
+              email: input.email,
+              password: input.password,
+              options: { emailRedirectTo: input.redirectTo },
+            }),
+          )
+        : client.auth.signUp({
+            email: input.email,
+            password: input.password,
+            options: { emailRedirectTo: input.redirectTo },
+          }));
       return {
         data: { session: backendSession(data.session) },
         error: backendError(error),
@@ -909,7 +1089,9 @@ function createSupabaseBackend(client: SupabaseClient, browser?: BrowserSessionS
     async verifyTotp(input) {
       return supabaseVerifyTotp(client, input);
     },
-    ...(browser ? { beginBoundSession: (session: AuthBackendSession) => browser.begin(session, reconcile) } : {}),
+    ...(browser
+      ? { beginBoundSession: (session: AuthBackendSession) => browser.begin(session, reconcile) }
+      : {}),
   };
 }
 
@@ -968,6 +1150,8 @@ export async function createBrowserAuthController(
 ): Promise<AuthController> {
   const config = await getAuthConfig(fetchAuth);
   const browser = new BrowserSessionStore(config, fetchAuth);
+  // Fail before SDK initialization can start background work with an unusable lock/store.
+  await browser.current();
   const client = createClient(config.supabaseUrl, config.supabasePublishableKey, {
     auth: {
       storageKey: browser.storageKey,
@@ -1048,7 +1232,14 @@ export async function getSelfSession(
   if (!value || typeof value !== 'object') throw actionError(null);
   const session = value as Record<string, unknown>;
   if (
-    !hasOnlyKeys(session, ['authUserId', 'email', 'emailVerified', 'sessionId', 'aal', 'applicationRole']) ||
+    !hasOnlyKeys(session, [
+      'authUserId',
+      'email',
+      'emailVerified',
+      'sessionId',
+      'aal',
+      'applicationRole',
+    ]) ||
     typeof session.authUserId !== 'string' ||
     !uuidPattern.test(session.authUserId) ||
     (session.email !== null && typeof session.email !== 'string') ||

@@ -82,6 +82,7 @@ export function useOperatorAuth(): OperatorAuthModel {
   const [controller, setController] = useState<AuthController | null>(null);
   const [auth, setAuth] = useState<AuthSnapshot>(initializingAuth);
   const [view, setView] = useState<OperatorAuthView>({ phase: 'initializing' });
+  const [viewToken, setViewToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const processedToken = useRef<string | null>(null);
@@ -155,13 +156,18 @@ export function useOperatorAuth(): OperatorAuthModel {
     }
     if (processedToken.current === token) return;
     processedToken.current = token;
+    setViewToken(token);
     const operation = ++revision.current;
     setError(null);
     setView({ phase: 'authorization-check' });
     void getSelfSession(token)
       .then(async (self) => {
         if (operation !== revision.current) return;
-        if (self.authUserId !== authUserId || self.applicationRole !== 'operator' || !self.emailVerified) {
+        if (
+          self.authUserId !== authUserId ||
+          self.applicationRole !== 'operator' ||
+          !self.emailVerified
+        ) {
           setView({ phase: 'denied', message: 'This account has no current operator assignment.' });
           return;
         }
@@ -196,8 +202,15 @@ export function useOperatorAuth(): OperatorAuthModel {
       })
       .catch((cause: unknown) => {
         if (operation !== revision.current) return;
-        if (cause instanceof AuthActionError &&
-            ['operator_access_denied', 'password_sign_in_required', 'password_update_required', 'unauthenticated'].includes(cause.code)) {
+        if (
+          cause instanceof AuthActionError &&
+          [
+            'operator_access_denied',
+            'password_sign_in_required',
+            'password_update_required',
+            'unauthenticated',
+          ].includes(cause.code)
+        ) {
           setView({ phase: 'denied', message: cause.message });
           return;
         }
@@ -280,6 +293,7 @@ export function useOperatorAuth(): OperatorAuthModel {
   );
 
   const signOut = useCallback(async () => {
+    const originatingToken = controller?.getSnapshot().accessToken;
     revision.current += 1;
     processedToken.current = null;
     setBusy(true);
@@ -287,10 +301,15 @@ export function useOperatorAuth(): OperatorAuthModel {
     setView({ phase: 'anonymous' });
     try {
       if (controller) await controller.signOut();
-    } catch {
+    } catch (cause) {
+      const currentToken = controller?.getSnapshot().accessToken;
+      if (currentToken && currentToken !== originatingToken) return;
       setView({
         phase: 'denied',
-        message: 'Sign-out confirmation is unavailable. Close this browser before leaving.',
+        message:
+          cause instanceof AuthActionError
+            ? cause.message
+            : 'Sign-out confirmation is unavailable. Close this browser before leaving.',
       });
     } finally {
       setBusy(false);
@@ -298,7 +317,13 @@ export function useOperatorAuth(): OperatorAuthModel {
   }, [controller]);
 
   return {
-    view,
+    view:
+      (view.phase === 'authorized' ||
+        view.phase === 'mfa-enrollment' ||
+        view.phase === 'mfa-challenge') &&
+      (authPhase !== 'authenticated' || viewToken !== accessToken)
+        ? { phase: authPhase === 'anonymous' ? 'anonymous' : 'authorization-check' }
+        : view,
     email: auth.user?.email ?? null,
     busy,
     error,

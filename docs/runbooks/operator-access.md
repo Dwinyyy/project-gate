@@ -2,7 +2,7 @@
 
 This runbook implements the owner's requested flow: normal registration → owner assignment → main-site password sign-in → required authenticator enrollment/challenge → operator console. Assignment alone grants no authenticated operator session or administrative permissions. See [ADR 0010](../adr/0010-operator-assignment-and-routing.md).
 
-**Deployment prerequisite:** these revised steps require canonical migration `20260922025156_operator_assignment_routing.sql` and the reviewed frontend/API changes. Until current verification evidence records deployment, this is a prepared runbook, not a claim that the new flow is live.
+**Deployment prerequisite:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied in managed development. These revised sign-in steps still require deployment of the reviewed frontend/API changes. Until current verification evidence records that deployment, this is a prepared runbook, not a claim that the new flow is live.
 
 ## Assign an account by email
 
@@ -34,6 +34,8 @@ The SQL Editor workflow is documented by [Supabase database functions](https://s
 
 ## Sign in through the main site
 
+After an authentication deployment, close or reload older player/operator tabs before testing. Cross-tab session protection requires every open tab to use the current adapter.
+
 1. Open [main-site sign-in](https://project-gate-player.vercel.app/account/sign-in).
 2. Enter **Email address** and **Password**, then click **Sign in**.
 3. An assigned operator is sent to `/operator/` on the same site. A normal player stays in the player application. The main-site login is reused; the operator page does not ask for that password a second time.
@@ -43,6 +45,8 @@ The SQL Editor workflow is documented by [Supabase database functions](https://s
 7. Click **Sign out**, return to main-site sign-in and repeat the password/code challenge. A password-only session must never open authorized operator content.
 
 The standalone [operator preview](https://project-gate-operator.vercel.app) remains available. It has its own browser origin, so a main-site login does not automatically appear there. Use the main-site `/operator/` route for the seamless flow requested here.
+
+Ordinary sign-out revokes the session that started it. Password replacement requests global revocation of that account's refresh sessions, including a newer login to the same account. A concurrent different-account login must be preserved. If the provider cannot confirm revocation, the app reports the partial outcome rather than claiming complete sign-out.
 
 ## Remove operator access
 

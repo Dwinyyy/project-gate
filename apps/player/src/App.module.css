@@ -23,6 +23,8 @@
   position: absolute;
 }
 .topbar {
+  position: relative;
+  z-index: 2;
   min-width: 0;
   padding: calc(10px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px
     max(16px, env(safe-area-inset-left));
@@ -761,6 +763,29 @@
 }
 .accountLink {
   white-space: nowrap;
+}
+.accountNotice {
+  position: absolute;
+  top: 100%;
+  inset-inline: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--hw-border);
+  border-radius: 6px;
+  background: #14202b;
+  color: var(--hw-text);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 8px 20px #0006;
+}
+.accountNotice p {
+  margin: 0;
+}
+.accountNotice button {
+  flex-shrink: 0;
+  min-height: 44px;
 }
 .accountControl {
   min-height: 44px;

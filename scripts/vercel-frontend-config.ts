@@ -65,7 +65,10 @@ export function createVercelFrontendConfig(
             routes.rewrite('/operator/:path((?!assets(?:/|$)).*)', '/operator/index.html'),
           ]
         : []),
-      routes.rewrite(options.embeddedOperator ? spaFallbackSource : '/:path((?!v1(?:/|$)).*)', '/index.html'),
+      routes.rewrite(
+        options.embeddedOperator ? spaFallbackSource : '/:path((?!v1(?:/|$)).*)',
+        '/index.html',
+      ),
     ],
   };
 }

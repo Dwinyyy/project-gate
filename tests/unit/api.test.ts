@@ -125,7 +125,8 @@ describe('foundation API trust boundaries', () => {
       authUserId: '11111111-1111-4111-8111-111111111111',
       email: 'player@example.test',
       emailVerified: true,
-      hasVerifiedTotp: false, totpAuthenticated: false,
+      hasVerifiedTotp: false,
+      totpAuthenticated: false,
       sessionId: '22222222-2222-4222-8222-222222222222',
       aal: 'aal1',
       accessMode: 'standard' as const,
@@ -165,11 +166,22 @@ describe('foundation API trust boundaries', () => {
     const authUserId = '11111111-1111-4111-8111-111111111111';
     const app = buildApp({
       auth: {
-        publicConfig: { supabaseUrl: 'https://project.supabase.co', supabasePublishableKey: 'sb_publishable_example' },
-        verifier: { verify: async () => ({
-          authUserId, email: 'assigned@example.test', emailVerified: true,
-          hasVerifiedTotp: false, totpAuthenticated: false, sessionId: null, aal: 'aal1', accessMode: 'standard',
-        }) },
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async () => ({
+            authUserId,
+            email: 'assigned@example.test',
+            emailVerified: true,
+            hasVerifiedTotp: false,
+            totpAuthenticated: false,
+            sessionId: null,
+            aal: 'aal1',
+            accessMode: 'standard',
+          }),
+        },
       },
       operators: { findActiveOperator: async () => ({ authUserId, permissions: [] }) },
     });
@@ -185,18 +197,38 @@ describe('foundation API trust boundaries', () => {
 
   it('fails closed when the operator assignment store is unavailable', async () => {
     const auth = {
-      publicConfig: { supabaseUrl: 'https://project.supabase.co', supabasePublishableKey: 'sb_publishable_example' },
-      verifier: { verify: async () => ({
-        authUserId: '11111111-1111-4111-8111-111111111111', email: 'player@example.test',
-        emailVerified: true, hasVerifiedTotp: false, totpAuthenticated: false, sessionId: null, aal: 'aal1' as const,
-        accessMode: 'standard' as const,
-      }) },
+      publicConfig: {
+        supabaseUrl: 'https://project.supabase.co',
+        supabasePublishableKey: 'sb_publishable_example',
+      },
+      verifier: {
+        verify: async () => ({
+          authUserId: '11111111-1111-4111-8111-111111111111',
+          email: 'player@example.test',
+          emailVerified: true,
+          hasVerifiedTotp: false,
+          totpAuthenticated: false,
+          sessionId: null,
+          aal: 'aal1' as const,
+          accessMode: 'standard' as const,
+        }),
+      },
     };
     const unavailableStore = buildApp({ auth });
-    const failedStore = buildApp({ auth, operators: { findActiveOperator: async () => { throw new Error('private database details'); } } });
+    const failedStore = buildApp({
+      auth,
+      operators: {
+        findActiveOperator: async () => {
+          throw new Error('private database details');
+        },
+      },
+    });
     apps.push(unavailableStore, failedStore);
     for (const app of [unavailableStore, failedStore]) {
-      const response = await app.inject({ url: '/v1/auth/session', headers: { authorization: 'Bearer valid-password-token' } });
+      const response = await app.inject({
+        url: '/v1/auth/session',
+        headers: { authorization: 'Bearer valid-password-token' },
+      });
       expect(response.statusCode).toBe(503);
       expect(response.body).not.toMatch(/private database details/i);
     }
@@ -245,7 +277,8 @@ describe('foundation API trust boundaries', () => {
             authUserId,
             email: 'operator@example.test',
             emailVerified: true,
-            hasVerifiedTotp: true, totpAuthenticated: true,
+            hasVerifiedTotp: true,
+            totpAuthenticated: true,
             sessionId: '22222222-2222-4222-8222-222222222222',
             aal: 'aal1',
             accessMode: 'standard' as const,
@@ -282,7 +315,8 @@ describe('foundation API trust boundaries', () => {
             authUserId: '11111111-1111-4111-8111-111111111111',
             email: 'player@example.test',
             emailVerified: true,
-            hasVerifiedTotp: false, totpAuthenticated: false,
+            hasVerifiedTotp: false,
+            totpAuthenticated: false,
             sessionId: '22222222-2222-4222-8222-222222222222',
             aal: 'aal2',
             accessMode: 'standard' as const,
@@ -315,7 +349,8 @@ describe('foundation API trust boundaries', () => {
             authUserId,
             email: 'operator@example.test',
             emailVerified: true,
-            hasVerifiedTotp: true, totpAuthenticated: true,
+            hasVerifiedTotp: true,
+            totpAuthenticated: true,
             sessionId: '22222222-2222-4222-8222-222222222222',
             aal: 'aal2',
             accessMode: 'standard' as const,
@@ -348,20 +383,39 @@ describe('foundation API trust boundaries', () => {
     ['unverified email', false, true, true],
     ['missing verified TOTP', true, false, true],
     ['no TOTP challenge', true, true, false],
-  ] as const)('denies an assigned aal2 session with %s', async (_label, emailVerified, hasVerifiedTotp, totpAuthenticated) => {
-    const authUserId = '11111111-1111-4111-8111-111111111111';
-    const app = buildApp({
-      auth: {
-        publicConfig: { supabaseUrl: 'https://project.supabase.co', supabasePublishableKey: 'sb_publishable_example' },
-        verifier: { verify: async () => ({ authUserId, email: 'operator@example.test', emailVerified,
-          hasVerifiedTotp, totpAuthenticated, sessionId: null, aal: 'aal2', accessMode: 'standard' }) },
-      },
-      operators: { findActiveOperator: async () => ({ authUserId, permissions: [] }) },
-    });
-    apps.push(app);
-    const response = await app.inject({ url: '/v1/operator/session', headers: { authorization: 'Bearer password-token' } });
-    expect(response.statusCode).toBe(403);
-  });
+  ] as const)(
+    'denies an assigned aal2 session with %s',
+    async (_label, emailVerified, hasVerifiedTotp, totpAuthenticated) => {
+      const authUserId = '11111111-1111-4111-8111-111111111111';
+      const app = buildApp({
+        auth: {
+          publicConfig: {
+            supabaseUrl: 'https://project.supabase.co',
+            supabasePublishableKey: 'sb_publishable_example',
+          },
+          verifier: {
+            verify: async () => ({
+              authUserId,
+              email: 'operator@example.test',
+              emailVerified,
+              hasVerifiedTotp,
+              totpAuthenticated,
+              sessionId: null,
+              aal: 'aal2',
+              accessMode: 'standard',
+            }),
+          },
+        },
+        operators: { findActiveOperator: async () => ({ authUserId, permissions: [] }) },
+      });
+      apps.push(app);
+      const response = await app.inject({
+        url: '/v1/operator/session',
+        headers: { authorization: 'Bearer password-token' },
+      });
+      expect(response.statusCode).toBe(403);
+    },
+  );
 
   it.each(['aal1', 'aal2'] as const)(
     'denies %s recovery sessions before normal or operator authorization',
@@ -372,7 +426,8 @@ describe('foundation API trust boundaries', () => {
         authUserId,
         email: 'player@example.test',
         emailVerified: true,
-        hasVerifiedTotp: true, totpAuthenticated: true,
+        hasVerifiedTotp: true,
+        totpAuthenticated: true,
         sessionId: '22222222-2222-4222-8222-222222222222',
         aal,
         accessMode: 'recovery' as const,
@@ -411,31 +466,48 @@ describe('foundation API trust boundaries', () => {
 
   it('rechecks provider factors and current assignment for an already issued token', async () => {
     const authUserId = '11111111-1111-4111-8111-111111111111';
-    const payload = Buffer.from(JSON.stringify({
-      sub: authUserId, exp: Math.floor(Date.now() / 1000) + 600,
-      session_id: '22222222-2222-4222-8222-222222222222', aal: 'aal2',
-      amr: [
-        { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
-        { method: 'totp', timestamp: Math.floor(Date.now() / 1000) - 30 },
-      ],
-    })).toString('base64url');
+    const payload = Buffer.from(
+      JSON.stringify({
+        sub: authUserId,
+        exp: Math.floor(Date.now() / 1000) + 600,
+        session_id: '22222222-2222-4222-8222-222222222222',
+        aal: 'aal2',
+        amr: [
+          { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
+          { method: 'totp', timestamp: Math.floor(Date.now() / 1000) - 30 },
+        ],
+      }),
+    ).toString('base64url');
     const token = `eyJhbGciOiJub25lIn0.${payload}.provider-signature`;
     let assigned = true;
     let factors: unknown = [{ factor_type: 'totp', status: 'verified' }];
     const verifier = createSupabaseAuthVerifier({
-      supabaseUrl: 'https://project.supabase.co', publishableKey: 'sb_publishable_example',
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
       fetch: (async (_input, init) => {
         if (new Headers(init?.headers).get('authorization') !== `Bearer ${token}`)
           return new Response(null, { status: 401 });
-        return Response.json({ id: authUserId, email: 'operator@example.test',
-          email_confirmed_at: '2026-09-13T12:00:00.000Z', factors,
+        return Response.json({
+          id: authUserId,
+          email: 'operator@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+          factors,
           user_metadata: { operator: true },
         });
       }) as typeof fetch,
     });
     const app = buildApp({
-      auth: { publicConfig: { supabaseUrl: 'https://project.supabase.co', supabasePublishableKey: 'sb_publishable_example' }, verifier },
-      operators: { findActiveOperator: async () => assigned ? { authUserId, permissions: ['feature_controls:read'] } : null },
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier,
+      },
+      operators: {
+        findActiveOperator: async () =>
+          assigned ? { authUserId, permissions: ['feature_controls:read'] } : null,
+      },
     });
     apps.push(app);
     const headers = { authorization: `Bearer ${token}` };
@@ -447,7 +519,9 @@ describe('foundation API trust boundaries', () => {
     expect(removedFactor.json()).toMatchObject({ error: { code: 'MFA_REQUIRED' } });
     factors = [{ factor_type: 'totp', status: 'verified' }];
     assigned = false;
-    expect((await app.inject({ url: '/v1/auth/session', headers })).json()).toMatchObject({ applicationRole: 'player' });
+    expect((await app.inject({ url: '/v1/auth/session', headers })).json()).toMatchObject({
+      applicationRole: 'player',
+    });
     const suspended = await app.inject({ url: '/v1/operator/session', headers });
     expect(suspended.statusCode).toBe(403);
     expect(suspended.json()).toMatchObject({ error: { code: 'OPERATOR_ACCESS_DENIED' } });

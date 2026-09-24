@@ -33,10 +33,12 @@ function providerFetch(expectedToken: string, response: Response): typeof fetch 
 
 describe('Supabase access-token verifier', () => {
   it('returns a minimal identity only after the provider validates the same token', async () => {
-    const token = accessToken({ amr: [
-      { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
-      { method: 'totp', timestamp: Math.floor(Date.now() / 1000) - 30 },
-    ] });
+    const token = accessToken({
+      amr: [
+        { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
+        { method: 'totp', timestamp: Math.floor(Date.now() / 1000) - 30 },
+      ],
+    });
     const verifier = createSupabaseAuthVerifier({
       supabaseUrl: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_example',
@@ -74,13 +76,16 @@ describe('Supabase access-token verifier', () => {
     const verifier = createSupabaseAuthVerifier({
       supabaseUrl: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_example',
-      fetch: providerFetch(token, Response.json({
-        id: authUserId,
-        email: 'operator@example.test',
-        email_confirmed_at: '2026-09-13T12:00:00.000Z',
-        ...(factors === undefined ? {} : { factors }),
-        user_metadata: { operator: true, hasVerifiedTotp: true },
-      })),
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'operator@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+          ...(factors === undefined ? {} : { factors }),
+          user_metadata: { operator: true, hasVerifiedTotp: true },
+        }),
+      ),
     });
     await expect(verifier.verify(token)).resolves.toMatchObject({ hasVerifiedTotp: false });
   });
@@ -96,18 +101,23 @@ describe('Supabase access-token verifier', () => {
   });
 
   it('does not treat non-TOTP AAL2 as an authenticator challenge', async () => {
-    const token = accessToken({ amr: [
-      { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
-      { method: 'mfa/phone', timestamp: Math.floor(Date.now() / 1000) - 30 },
-    ] });
+    const token = accessToken({
+      amr: [
+        { method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 },
+        { method: 'mfa/phone', timestamp: Math.floor(Date.now() / 1000) - 30 },
+      ],
+    });
     const verifier = createSupabaseAuthVerifier({
-      supabaseUrl: 'https://project.supabase.co', publishableKey: 'sb_publishable_example',
-      fetch: providerFetch(token, Response.json({ id: authUserId,
-        factors: [{ factor_type: 'totp', status: 'verified' }],
-      })),
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({ id: authUserId, factors: [{ factor_type: 'totp', status: 'verified' }] }),
+      ),
     });
     await expect(verifier.verify(token)).resolves.toMatchObject({
-      hasVerifiedTotp: true, totpAuthenticated: false,
+      hasVerifiedTotp: true,
+      totpAuthenticated: false,
     });
   });
 

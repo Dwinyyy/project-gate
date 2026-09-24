@@ -16,13 +16,17 @@ interface TestFactor {
   updated_at: string;
 }
 
-function accessToken(aal: 'aal1' | 'aal2', method = 'password'): string {
+function accessToken(
+  aal: 'aal1' | 'aal2',
+  method = 'password',
+  sessionId = operatorSessionId,
+): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
     sub: operatorUserId,
     exp: 2_000_000_000,
     aal,
-    session_id: operatorSessionId,
+    session_id: sessionId,
     aud: 'authenticated',
     role: 'authenticated',
     email: 'operator@example.test',
@@ -89,6 +93,7 @@ function playerSession(
     aal?: 'aal1' | 'aal2';
     factors?: TestFactor[];
     additionalMethods?: string[];
+    sessionId?: string;
   } = {},
 ) {
   const factors = options.factors ?? [];
@@ -97,7 +102,7 @@ function playerSession(
     sub: playerUserId,
     exp: 2_000_000_000,
     aal: options.aal ?? 'aal1',
-    session_id: playerSessionId,
+    session_id: options.sessionId ?? playerSessionId,
     aud: 'authenticated',
     role: 'authenticated',
     email: 'player@example.test',
@@ -182,13 +187,23 @@ async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
   );
 }
 
-test('assigned main-site sign-in opens same-origin operator MFA without another password', async ({ page }) => {
+test('assigned main-site sign-in opens same-origin operator MFA without another password', async ({
+  page,
+}) => {
   await useControlledAuth(page);
   await page.route('**/auth/v1/token**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(passwordSession('aal1', [])) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(passwordSession('aal1', [])),
+    }),
   );
   await page.route('**/auth/v1/user', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(operatorUser([])) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(operatorUser([])),
+    }),
   );
   await page.route('**/v1/auth/session', (route) =>
     route.fulfill({
@@ -216,10 +231,18 @@ test('assigned main-site sign-in opens same-origin operator MFA without another 
 test('ordinary main-site sign-in stays in the player application', async ({ page }) => {
   await useControlledAuth(page);
   await page.route('**/auth/v1/token**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(playerSession('password')) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(playerSession('password')),
+    }),
   );
   await page.route('**/auth/v1/user', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(playerUser()) }),
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(playerUser()),
+    }),
   );
   await page.route('**/v1/auth/session', (route) =>
     route.fulfill({
@@ -243,93 +266,278 @@ test('ordinary main-site sign-in stays in the player application', async ({ page
   await expect(page.getByRole('heading', { name: 'Welcome to Hunter World.' })).toBeVisible();
 });
 
-test('operator can retry temporary assignment verification failure without signing in again', async ({ page }) => {
+test('player sees a dismissible warning when local sign-out lacks server confirmation', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: playerUserId,
+        email: 'player@example.test',
+        emailVerified: true,
+        sessionId: playerSessionId,
+        aal: 'aal1',
+        applicationRole: 'player',
+      }),
+    }),
+  );
+  await restorePlayerSession(page, 'password');
+  await page.route('**/auth/v1/logout**', (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'unexpected_failure', msg: 'fixture unavailable' }),
+    }),
+  );
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  const notice = page.getByRole('alert');
+  await expect(notice).toContainText(
+    'You are signed out on this device, but the server could not confirm sign-out.',
+  );
+  expect(await page.evaluate(() => localStorage.getItem('sb-127-auth-token'))).toBeNull();
+  const bounds = await notice.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+  await page.screenshot({ path: '.cache/sign-out-warning-320.png' });
+  await page.getByRole('button', { name: 'Dismiss sign-out message' }).click();
+  await expect(notice).toHaveCount(0);
+});
+
+test('a replaced sign-out error never resurfaces after the newer session ends', async ({
+  page,
+  context,
+}) => {
+  const replacementSession = playerSession('password', {
+    sessionId: '66666666-6666-4666-8666-666666666666',
+  });
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: playerUserId,
+        email: 'player@example.test',
+        emailVerified: true,
+        sessionId: playerSessionId,
+        aal: 'aal1',
+        applicationRole: 'player',
+      }),
+    }),
+  );
+  await restorePlayerSession(page, 'password');
+  let releaseLogout: () => void = () => undefined;
+  const heldLogout = new Promise<void>((resolve) => {
+    releaseLogout = resolve;
+  });
+  let logoutStarted: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    logoutStarted = resolve;
+  });
+  await page.route('**/auth/v1/logout**', async (route) => {
+    logoutStarted();
+    await heldLogout;
+    await route.fulfill({ status: 204, body: '' });
+  });
+  await context.route('**/__auth-state-test', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Auth state fixture</body>',
+    }),
+  );
+
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await started;
+  const second = await context.newPage();
+  await second.goto('/__auth-state-test');
+  await second.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: replacementSession },
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
+      ),
+    )
+    .toBe(replacementSession.access_token);
+  releaseLogout();
+  await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
+  await second.evaluate((storageKey) => localStorage.removeItem(storageKey), 'sb-127-auth-token');
+
+  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('operator can retry temporary assignment verification failure without signing in again', async ({
+  page,
+}) => {
   await useOperatorPasswordSession(page, []);
   let failLookup = true;
   let passwordRequests = 0;
   await page.route('**/auth/v1/token**', (route) => {
     passwordRequests += 1;
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(passwordSession('aal1', [])) });
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(passwordSession('aal1', [])),
+    });
   });
-  await page.route('**/v1/auth/session', (route) => route.fulfill({
-    status: failLookup ? 503 : 200,
-    contentType: 'application/json',
-    body: JSON.stringify(failLookup ? { error: { code: 'AUTH_UNAVAILABLE', requestId: 'fixture' } } : {
-      authUserId: operatorUserId, email: 'operator@example.test', emailVerified: true,
-      sessionId: operatorSessionId, aal: 'aal1', applicationRole: 'operator',
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: failLookup ? 503 : 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        failLookup
+          ? { error: { code: 'AUTH_UNAVAILABLE', requestId: 'fixture' } }
+          : {
+              authUserId: operatorUserId,
+              email: 'operator@example.test',
+              emailVerified: true,
+              sessionId: operatorSessionId,
+              aal: 'aal1',
+              applicationRole: 'operator',
+            },
+      ),
     }),
-  }));
+  );
   await page.goto('http://127.0.0.1:5174/operator/');
   await page.getByLabel('Operator email').fill('operator@example.test');
   await page.getByLabel('Password').fill('long-enough-password');
   await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByRole('heading', { name: 'Operator authentication unavailable.' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Operator authentication unavailable.' }),
+  ).toBeVisible();
   failLookup = false;
   await page.getByRole('button', { name: 'Retry verification' }).click({ timeout: 1_000 });
   await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
   expect(passwordRequests).toBe(1);
 });
 
-for (const recovery of [false, true]) {
-  test(`${recovery ? 'recovery' : 'operator'} MFA cannot replace a newer login in another tab`, async ({ page, context }) => {
-    const factors: TestFactor[] = [{
-      id: operatorFactorId, status: 'verified', factor_type: 'totp',
-      friendly_name: 'Test authenticator', created_at: '2026-09-13T12:00:00.000Z',
-      updated_at: '2026-09-13T12:00:00.000Z',
-    }];
+for (const { recovery, sameUser } of [
+  { recovery: false, sameUser: false },
+  { recovery: true, sameUser: false },
+  { recovery: false, sameUser: true },
+]) {
+  test(`${recovery ? 'recovery' : 'operator'} MFA cannot replace a newer ${sameUser ? 'same-user ' : ''}login in another tab`, async ({
+    page,
+    context,
+  }) => {
+    const factors: TestFactor[] = [
+      {
+        id: operatorFactorId,
+        status: 'verified',
+        factor_type: 'totp',
+        friendly_name: 'Test authenticator',
+        created_at: '2026-09-13T12:00:00.000Z',
+        updated_at: '2026-09-13T12:00:00.000Z',
+      },
+    ];
     const sessionA = {
       ...passwordSession('aal1', factors),
       access_token: accessToken('aal1', recovery ? 'recovery' : 'password'),
     };
-    const sessionB = playerSession('password');
-    await context.route('**/v1/auth/config', (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: JSON.stringify({
-        supabaseUrl: 'http://127.0.0.1:5173', supabasePublishableKey: 'sb_publishable_browser_fixture',
+    const sessionB = sameUser
+      ? {
+          ...passwordSession('aal1', factors),
+          access_token: accessToken('aal1', 'password', playerSessionId),
+          refresh_token: 'fixture-new-same-user-login',
+        }
+      : playerSession('password');
+    const emailB = sameUser ? 'operator@example.test' : 'player@example.test';
+    await context.route('**/v1/auth/config', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          supabaseUrl: 'http://127.0.0.1:5173',
+          supabasePublishableKey: 'sb_publishable_browser_fixture',
+        }),
       }),
-    }));
-    await context.route('**/auth/v1/user', (route) => route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify(route.request().headers().authorization === `Bearer ${sessionB.access_token}`
-        ? playerUser() : operatorUser(factors)),
-    }));
-    await context.route('**/auth/v1/token**', (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: JSON.stringify(sessionB),
-    }));
+    );
+    await context.route('**/auth/v1/user', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          !sameUser && route.request().headers().authorization === `Bearer ${sessionB.access_token}`
+            ? playerUser()
+            : operatorUser(factors),
+        ),
+      }),
+    );
+    await context.route('**/auth/v1/token**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(sessionB),
+      }),
+    );
     await context.route('**/v1/auth/session', (route) => {
       const isB = route.request().headers().authorization === `Bearer ${sessionB.access_token}`;
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        authUserId: isB ? playerUserId : operatorUserId,
-        email: isB ? 'player@example.test' : 'operator@example.test', emailVerified: true,
-        sessionId: isB ? playerSessionId : operatorSessionId, aal: 'aal1',
-        applicationRole: isB ? 'player' : 'operator',
-      }) });
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authUserId: isB && !sameUser ? playerUserId : operatorUserId,
+          email: isB ? emailB : 'operator@example.test',
+          emailVerified: true,
+          sessionId: isB ? playerSessionId : operatorSessionId,
+          aal: 'aal1',
+          applicationRole: isB && !sameUser ? 'player' : 'operator',
+        }),
+      });
     });
-    await context.route(`**/auth/v1/factors/${operatorFactorId}/challenge`, (route) => route.fulfill({
-      status: 200, contentType: 'application/json',
-      body: JSON.stringify({ id: 'deferred-challenge', type: 'totp', expires_at: 2_000_000_000 }),
-    }));
+    await context.route(`**/auth/v1/factors/${operatorFactorId}/challenge`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'deferred-challenge', type: 'totp', expires_at: 2_000_000_000 }),
+      }),
+    );
     let releaseVerification: () => void = () => undefined;
-    const heldVerification = new Promise<void>((resolveHeld) => { releaseVerification = resolveHeld; });
+    const heldVerification = new Promise<void>((resolveHeld) => {
+      releaseVerification = resolveHeld;
+    });
     let verificationStarted: () => void = () => undefined;
-    const started = new Promise<void>((resolveStarted) => { verificationStarted = resolveStarted; });
+    const started = new Promise<void>((resolveStarted) => {
+      verificationStarted = resolveStarted;
+    });
     let completedVerification: () => void = () => undefined;
-    const completed = new Promise<void>((resolveCompleted) => { completedVerification = resolveCompleted; });
+    const completed = new Promise<void>((resolveCompleted) => {
+      completedVerification = resolveCompleted;
+    });
     await context.route(`**/auth/v1/factors/${operatorFactorId}/verify`, async (route) => {
       verificationStarted();
       await heldVerification;
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-        ...passwordSession('aal2', factors),
-        access_token: accessToken('aal2', recovery ? 'recovery' : 'password'),
-      }) });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...passwordSession('aal2', factors),
+          access_token: accessToken('aal2', recovery ? 'recovery' : 'password'),
+        }),
+      });
       completedVerification();
     });
-    await context.route('**/__auth-concurrency-test', (route) => route.fulfill({
-      status: 200, contentType: 'text/html', body: '<!doctype html><body>Test login client</body>',
-    }));
+    await context.route('**/__auth-concurrency-test', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<!doctype html><body>Test login client</body>',
+      }),
+    );
     // Seed from an inert same-origin page: a loaded player app would legitimately route the
     // operator session to /operator/ itself and race this navigation.
     await page.goto('/__auth-concurrency-test');
-    await page.evaluate((session) => localStorage.setItem('sb-127-auth-token', JSON.stringify(session)), sessionA);
+    await page.evaluate(
+      (session) => localStorage.setItem('sb-127-auth-token', JSON.stringify(session)),
+      sessionA,
+    );
     await page.goto(recovery ? '/account/recovery' : '/operator/');
     await page.getByLabel(recovery ? 'Authenticator code' : 'Six-digit code').fill('123456');
     await page.getByRole('button', { name: 'Verify authenticator' }).click();
@@ -340,15 +548,26 @@ for (const recovery of [false, true]) {
     const second = await context.newPage();
     await second.goto('/__auth-concurrency-test');
     const moduleUrl = `/@fs/${resolve('packages/client/src/auth.ts').replaceAll('\\', '/')}`;
-    await second.evaluate(async (url) => {
-      const client = await import(url) as typeof import('../../packages/client/src/auth');
-      const controller = await client.createBrowserAuthController();
-      await controller.ready();
-      controller.subscribe(() => { document.body.textContent = controller.getSnapshot().user?.email ?? 'Signed out'; });
-      await controller.signIn('player@example.test', 'long-enough-password');
-    }, moduleUrl);
-    await expect(second.locator('body')).toHaveText('player@example.test');
-    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token)).toBe(sessionB.access_token);
+    await second.evaluate(
+      async ({ url, email }) => {
+        const client = (await import(url)) as typeof import('../../packages/client/src/auth');
+        const controller = await client.createBrowserAuthController();
+        await controller.ready();
+        controller.subscribe(() => {
+          document.body.textContent = controller.getSnapshot().user?.email ?? 'Signed out';
+        });
+        await controller.signIn(email, 'long-enough-password');
+      },
+      { url: moduleUrl, email: emailB },
+    );
+    await expect(second.locator('body')).toHaveText(emailB);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
+        ),
+      )
+      .toBe(sessionB.access_token);
     for (const tab of [page, second]) {
       await tab.evaluate(() => {
         const originalSetItem = Storage.prototype.setItem;
@@ -366,21 +585,30 @@ for (const recovery of [false, true]) {
     releaseVerification();
     await completed;
     await expect(page.getByRole('button', { name: 'Verifying…' })).toHaveCount(0);
-    await expect(second.locator('body')).toHaveText('player@example.test');
+    await expect(second.locator('body')).toHaveText(emailB);
     for (const tab of [page, second]) {
       const result = await tab.evaluate(() => ({
         current: JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
-        writes: (window as unknown as { authWrites: string[] }).authWrites.map((value) => JSON.parse(value).access_token as string),
+        writes: (window as unknown as { authWrites: string[] }).authWrites.map(
+          (value) => JSON.parse(value).access_token as string,
+        ),
       }));
       expect(result.current).toBe(sessionB.access_token);
       expect(result.writes.every((token) => token === sessionB.access_token)).toBe(true);
     }
     if (recovery) await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
-    else await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+    else
+      await expect(
+        page.getByRole('heading', {
+          name: sameUser ? 'Enter your authenticator code.' : 'Operator access denied.',
+        }),
+      ).toBeVisible();
   });
 }
 
-test('unassigned direct operator visit is denied before authenticator enrollment', async ({ page }) => {
+test('unassigned direct operator visit is denied before authenticator enrollment', async ({
+  page,
+}) => {
   await useOperatorPasswordSession(page, []);
   await page.route('**/v1/auth/session', (route) =>
     route.fulfill({
@@ -408,6 +636,134 @@ test('unassigned direct operator visit is denied before authenticator enrollment
   await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
   expect(enrollmentRequests).toBe(0);
+});
+
+test('recovery password update and global logout stay bound to the originating account across tabs', async ({
+  page,
+  context,
+}) => {
+  const sessionA = playerSession('recovery');
+  const sessionB = passwordSession('aal1', []);
+  const gate = () => {
+    let release: () => void = () => undefined;
+    const promise = new Promise<void>((resolveGate) => {
+      release = resolveGate;
+    });
+    return { promise, release };
+  };
+  const updateStarted = gate();
+  const updateResponse = gate();
+  const logoutStarted = gate();
+  const logoutResponse = gate();
+  const logoutCompleted = gate();
+  const requests: Array<{ action: string; authorization: string | undefined }> = [];
+  await context.route('**/v1/auth/config', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        supabaseUrl: 'http://127.0.0.1:5173',
+        supabasePublishableKey: 'sb_publishable_browser_fixture',
+      }),
+    }),
+  );
+  await context.route('**/auth/v1/user', async (route) => {
+    if (route.request().method() === 'PUT') {
+      requests.push({ action: 'update', authorization: route.request().headers().authorization });
+      updateStarted.release();
+      await updateResponse.promise;
+    }
+    const isB = route.request().headers().authorization === `Bearer ${sessionB.access_token}`;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(isB ? operatorUser([]) : playerUser()),
+    });
+  });
+  await context.route('**/auth/v1/logout**', async (route) => {
+    requests.push({ action: 'logout', authorization: route.request().headers().authorization });
+    expect(new URL(route.request().url()).searchParams.get('scope')).toBe('global');
+    logoutStarted.release();
+    await logoutResponse.promise;
+    await route.fulfill({ status: 204, body: '' });
+    logoutCompleted.release();
+  });
+  await context.route('**/auth/v1/token**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sessionB) }),
+  );
+  await context.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: operatorUserId,
+        email: 'operator@example.test',
+        emailVerified: true,
+        sessionId: operatorSessionId,
+        aal: 'aal1',
+        applicationRole: 'player',
+      }),
+    }),
+  );
+  await context.route('**/__auth-concurrency-test', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Test login client</body>',
+    }),
+  );
+  await page.goto('/account/sign-in');
+  await page.evaluate(
+    (session) => localStorage.setItem('sb-127-auth-token', JSON.stringify(session)),
+    sessionA,
+  );
+  await page.goto('/account/recovery');
+  await page.getByLabel('New password', { exact: true }).fill('new-long-enough-password');
+  await page.getByLabel('Confirm new password').fill('new-long-enough-password');
+  await page.getByRole('button', { name: 'Update password' }).click();
+  await updateStarted.promise;
+  const second = await context.newPage();
+  await second.goto('/__auth-concurrency-test');
+  await second.evaluate(
+    async (url) => {
+      const client = (await import(url)) as typeof import('../../packages/client/src/auth');
+      const controller = await client.createBrowserAuthController();
+      await controller.ready();
+      controller.subscribe(() => {
+        document.body.textContent = controller.getSnapshot().user?.email ?? 'Signed out';
+      });
+      await controller.signIn('operator@example.test', 'long-enough-password');
+    },
+    `/@fs/${resolve('packages/client/src/auth.ts').replaceAll('\\', '/')}`,
+  );
+  await expect(second.locator('body')).toHaveText('operator@example.test');
+  updateResponse.release();
+  await logoutStarted.promise;
+  expect(requests).toEqual([
+    { action: 'update', authorization: `Bearer ${sessionA.access_token}` },
+    { action: 'logout', authorization: `Bearer ${sessionA.access_token}` },
+  ]);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
+      ),
+    )
+    .toBe(sessionB.access_token);
+  logoutResponse.release();
+  await logoutCompleted.promise;
+  await expect(page.getByRole('button', { name: 'Working…' })).toHaveCount(0);
+  await expect(second.locator('body')).toHaveText('operator@example.test');
+  await expect(
+    page.getByText('Your password was updated. Sign in with your new password.'),
+  ).toHaveCount(0);
+  for (const tab of [page, second]) {
+    expect(
+      await tab.evaluate(
+        () => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
+      ),
+    ).toBe(sessionB.access_token);
+  }
 });
 
 test('player navigation, real API response and responsive layout', async ({ page }) => {
@@ -577,6 +933,118 @@ test('player recovery session stays locked to password replacement across naviga
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
   expect(ordinarySessionRequests).toBe(0);
+});
+
+test('replacing a recovery session clears password fields and stale errors', async ({
+  page,
+  context,
+}) => {
+  const replacementSession = playerSession('recovery', {
+    sessionId: '66666666-6666-4666-8666-666666666666',
+  });
+  await restorePlayerSession(page, 'recovery');
+  await page.getByLabel('New password', { exact: true }).fill('password-for-recovery-a');
+  await page.getByLabel('Confirm new password').fill('different-password-for-a');
+  await page.getByRole('button', { name: 'Update password' }).click();
+  await expect(page.getByText('The password confirmation does not match.')).toBeVisible();
+  await page.getByLabel('New password', { exact: true }).fill('password-for-recovery-a');
+  await page.getByLabel('Confirm new password').fill('password-for-recovery-a');
+  await context.route('**/__auth-state-test', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Auth state fixture</body>',
+    }),
+  );
+  const second = await context.newPage();
+  await second.goto('/__auth-state-test');
+  await second.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: replacementSession },
+  );
+
+  await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+  await expect(page.getByLabel('New password', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Confirm new password')).toHaveValue('');
+  await expect(page.getByText('The password confirmation does not match.')).toHaveCount(0);
+});
+
+test('replacing a recovery session clears the authenticator code', async ({ page, context }) => {
+  const factors: TestFactor[] = [
+    {
+      id: operatorFactorId,
+      status: 'verified',
+      factor_type: 'totp',
+      friendly_name: 'Player authenticator',
+      created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    },
+  ];
+  const replacementSession = playerSession('recovery', {
+    factors,
+    sessionId: '66666666-6666-4666-8666-666666666666',
+  });
+  await restorePlayerSession(page, 'recovery', { factors });
+  await page.getByLabel('Authenticator code').fill('123456');
+  await context.route('**/__auth-state-test', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Auth state fixture</body>',
+    }),
+  );
+  const second = await context.newPage();
+  await second.goto('/__auth-state-test');
+  await second.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: replacementSession },
+  );
+
+  await expect(
+    page.getByRole('heading', { name: 'Authenticator verification required.' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Authenticator code')).toHaveValue('');
+});
+
+test('entering recovery clears a stale recovery-request notice', async ({ page, context }) => {
+  const recoverySession = playerSession('recovery', {
+    sessionId: '66666666-6666-4666-8666-666666666666',
+  });
+  await useControlledAuth(page);
+  await page.route('**/auth/v1/recover**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+  );
+  await page.route('**/auth/v1/user', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(playerUser()),
+    }),
+  );
+  await page.goto('/account/recovery');
+  await page.getByLabel('Email address').fill('player@example.test');
+  await page.getByRole('button', { name: 'Send recovery link' }).click();
+  await expect(
+    page.getByText('If the account exists, a recovery link is on its way.'),
+  ).toBeVisible();
+  await context.route('**/__auth-state-test', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Auth state fixture</body>',
+    }),
+  );
+  const second = await context.newPage();
+  await second.goto('/__auth-state-test');
+  await second.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: recoverySession },
+  );
+
+  await expect(page.getByRole('heading', { name: 'Choose a new password.' })).toBeVisible();
+  await expect(page.getByText('If the account exists, a recovery link is on its way.')).toHaveCount(
+    0,
+  );
 });
 
 test('MFA-enrolled player verifies an authenticator before password replacement and stays recovery-only', async ({

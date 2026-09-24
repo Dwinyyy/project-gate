@@ -123,7 +123,10 @@ class MemoryAuthBackend implements AuthBackend {
     };
   }
 
-  async verifyTotp(input: { factorId: string; code: string }): ReturnType<AuthBackend['verifyTotp']> {
+  async verifyTotp(input: {
+    factorId: string;
+    code: string;
+  }): ReturnType<AuthBackend['verifyTotp']> {
     if (input.factorId !== 'factor-1' || input.code !== '123456') {
       return { data: null, error: { code: 'invalid_mfa_code', message: 'invalid' } };
     }
@@ -647,7 +650,8 @@ describe('browser Auth controller with session-bound operations', () => {
     const backend = new BoundMemoryBackend();
     backend.currentSession = session('recovery-a', 'recovery');
     backend.boundSignOutError = { message: 'private provider detail', status: 500 };
-    backend.beforeClear = () => backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    backend.beforeClear = () =>
+      backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
     const controller = createAuthControllerForBackend(backend);
     await controller.ready();
 
@@ -666,7 +670,8 @@ describe('browser Auth controller with session-bound operations', () => {
   it('never clears or reports success over a newer account after password replacement', async () => {
     const backend = new BoundMemoryBackend();
     backend.currentSession = session('recovery-a', 'recovery');
-    backend.beforeClear = () => backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
+    backend.beforeClear = () =>
+      backend.emit('SIGNED_IN', session('standard-b', 'standard', replacementUser));
     const controller = createAuthControllerForBackend(backend);
     await controller.ready();
 
@@ -677,7 +682,10 @@ describe('browser Auth controller with session-bound operations', () => {
     expect(backend.boundSignOuts).toEqual([user.id]);
     expect(backend.signOutScopes).toEqual([]);
     expect(backend.currentSession).toMatchObject({ accessToken: 'standard-b' });
-    expect(controller.getSnapshot()).toMatchObject({ phase: 'authenticated', user: replacementUser });
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'authenticated',
+      user: replacementUser,
+    });
   });
 
   it('publishes the promoted recovery AAL2 session immediately after verification', async () => {
@@ -830,11 +838,18 @@ describe('Auth HTTP boundaries', () => {
       code: 'unavailable',
     });
 
-    const invalidRole = (async () => Response.json({
-      authUserId: user.id, email: user.email, emailVerified: true,
-      sessionId: null, aal: 'aal1', applicationRole: 'admin',
-    })) as typeof fetch;
-    await expect(getSelfSession('access-token', invalidRole)).rejects.toMatchObject({ code: 'unavailable' });
+    const invalidRole = (async () =>
+      Response.json({
+        authUserId: user.id,
+        email: user.email,
+        emailVerified: true,
+        sessionId: null,
+        aal: 'aal1',
+        applicationRole: 'admin',
+      })) as typeof fetch;
+    await expect(getSelfSession('access-token', invalidRole)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
 
     const invalidPermission = (async () =>
       Response.json({

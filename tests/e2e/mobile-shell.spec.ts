@@ -29,6 +29,7 @@ test('small phones keep touch navigation in view while screens scroll and reset 
   await page.goto('/');
   const main = page.getByRole('main');
   const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(navigation).toBeVisible();
   const navBefore = (await navigation.boundingBox())!;
   expect(navBefore.y + navBefore.height).toBeGreaterThanOrEqual(630);
   for (const control of await page.getByRole('banner').getByRole('link').all()) {

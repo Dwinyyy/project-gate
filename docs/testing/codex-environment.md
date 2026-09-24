@@ -14,16 +14,16 @@ Private backup and original request: `C:/Users/aldwi/.codex/backups/quality-rout
 
 ## Routing
 
-| Profile | Model | Reasoning |
-| --- | --- | --- |
-| explorer | gpt-6-luna | medium |
-| implementer / implementer-high | gpt-6-luna | medium / high |
-| tester / tester-high | gpt-6-luna | medium / high |
-| frontend-specialist / frontend-specialist-high | gpt-5.6-sol | medium / high |
-| frontend-reviewer | gpt-5.6-sol | high |
-| senior-implementer / senior-implementer-high | gpt-6-sol | medium / high |
-| debugger / reviewer | gpt-6-sol | high |
-| architect / architect-medium / architect-high | gpt-6-astra | low / medium / high |
+| Profile                                        | Model       | Reasoning           |
+| ---------------------------------------------- | ----------- | ------------------- |
+| explorer                                       | gpt-6-luna  | medium              |
+| implementer / implementer-high                 | gpt-6-luna  | medium / high       |
+| tester / tester-high                           | gpt-6-luna  | medium / high       |
+| frontend-specialist / frontend-specialist-high | gpt-5.6-sol | medium / high       |
+| frontend-reviewer                              | gpt-5.6-sol | high                |
+| senior-implementer / senior-implementer-high   | gpt-6-sol   | medium / high       |
+| debugger / reviewer                            | gpt-6-sol   | high                |
+| architect / architect-medium / architect-high  | gpt-6-astra | low / medium / high |
 
 Luna handles bounded evidence, settled edits and focused checks. GPT-5.6 Sol remains a frontend/design specialist. GPT-6 Sol handles substantial implementation, integration and review. The Astra High parent retains interpretation and final quality control; delegated Astra reasoning starts lower when sufficient and escalates with evidence. Important unresolved judgment is never handed downward just to save compute.
 
@@ -57,5 +57,3 @@ Local diagnostic evidence is in ignored `.cache/routing-validation.json`, `routi
 Completed game phases: 0 and 1. Current task: Phase 2.1. The real standalone operator enrollment/sign-out/sign-in round trip passed. Owner assignment by email and main-site operator routing are local; cross-tab recovery/MFA isolation, retry UI, review, deployment and managed acceptance remain. The exact concurrency decision and preserved checkpoint are in `.cache/recovery-concurrency-decision.md`. The user explicitly requested automatic resumption after configuration validation. No game phase was advanced by this setup; the hosted account foundation is not yet playable.
 
 Supported behavior was checked against the installed CLI/protocol, [official subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents), and matching Context7 Codex source. Machine-local configuration does not travel with a repository clone.
-
-

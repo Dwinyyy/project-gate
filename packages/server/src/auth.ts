@@ -128,13 +128,15 @@ export function createSupabaseAuthVerifier(options: SupabaseAuthVerifierOptions)
         if (user.factors !== undefined && !Array.isArray(user.factors)) return null;
         const factors = (user.factors ?? []) as unknown[];
         if (
-          !factors.every((factor) =>
-            factor !== null &&
-            typeof factor === 'object' &&
-            typeof (factor as Record<string, unknown>).factor_type === 'string' &&
-            typeof (factor as Record<string, unknown>).status === 'string',
+          !factors.every(
+            (factor) =>
+              factor !== null &&
+              typeof factor === 'object' &&
+              typeof (factor as Record<string, unknown>).factor_type === 'string' &&
+              typeof (factor as Record<string, unknown>).status === 'string',
           )
-        ) return null;
+        )
+          return null;
         return {
           authUserId: claims.sub,
           email: user.email ?? null,

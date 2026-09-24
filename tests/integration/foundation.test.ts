@@ -353,10 +353,10 @@ test('operator access is private, current, and read-only to the runtime', async 
 
 async function verifiedOperatorCandidate(withMfa = true): Promise<string> {
   const id = randomUUID();
-  await owner.query('INSERT INTO auth.users(id, email, email_confirmed_at) VALUES ($1, $2, now())', [
-    id,
-    `${id}@example.test`,
-  ]);
+  await owner.query(
+    'INSERT INTO auth.users(id, email, email_confirmed_at) VALUES ($1, $2, now())',
+    [id, `${id}@example.test`],
+  );
   if (withMfa) {
     await owner.query(
       "INSERT INTO auth.mfa_factors(id, user_id, factor_type, status) VALUES ($1, $2, 'totp', 'verified')",
@@ -393,7 +393,13 @@ test('owner assignment can precede TOTP without adding administrative permission
 test('owner email assignment is attributable, retry-safe and does not undo suspension on replay', async () => {
   const id = await verifiedOperatorCandidate(false);
   const requestId = randomUUID();
-  const args = [`  ${id.toUpperCase()}@EXAMPLE.TEST  `, 'active', 'project-owner', 'Operator onboarding', requestId];
+  const args = [
+    `  ${id.toUpperCase()}@EXAMPLE.TEST  `,
+    'active',
+    'project-owner',
+    'Operator onboarding',
+    requestId,
+  ];
   const query = 'SELECT ops.set_operator_status_by_email($1, $2, $3, $4, $5) AS receipt';
   const assigned = await Promise.all([owner.query(query, args), owner.query(query, args)]);
   expect(assigned[0]?.rows[0]?.receipt).toMatchObject({
@@ -404,25 +410,50 @@ test('owner email assignment is attributable, retry-safe and does not undo suspe
     database_actor: 'postgres',
   });
   expect(assigned[1]?.rows[0]?.receipt).toEqual(assigned[0]?.rows[0]?.receipt);
-  await owner.query(query, [`${id}@example.test`, 'suspended', 'project-owner', 'End test access', randomUUID()]);
+  await owner.query(query, [
+    `${id}@example.test`,
+    'suspended',
+    'project-owner',
+    'End test access',
+    randomUUID(),
+  ]);
   await owner.query(query, args);
   await expect(findActiveOperator(database.pool, id)).resolves.toBeNull();
-  await expect(owner.query(query, [args[0], 'active', 'project-owner', 'Changed reason', requestId])).rejects.toThrow('different terms');
-  expect((await owner.query('SELECT * FROM ops.operator_access_changes WHERE request_id = $1', [requestId])).rowCount).toBe(1);
+  await expect(
+    owner.query(query, [args[0], 'active', 'project-owner', 'Changed reason', requestId]),
+  ).rejects.toThrow('different terms');
+  expect(
+    (
+      await owner.query('SELECT * FROM ops.operator_access_changes WHERE request_id = $1', [
+        requestId,
+      ])
+    ).rowCount,
+  ).toBe(1);
 });
 
 test('email management fails safely for missing, ambiguous and unverified identities', async () => {
   const query = 'SELECT ops.set_operator_status_by_email($1, $2, $3, $4)';
-  const assign = (email: string) => owner.query(query, [email, 'active', 'project-owner', 'Eligibility test']);
+  const assign = (email: string) =>
+    owner.query(query, [email, 'active', 'project-owner', 'Eligibility test']);
   await expect(assign('missing@example.test')).rejects.toThrow('exactly one account');
   await expect(assign('bad\naddress@example.test')).rejects.toThrow('Invalid operator email');
   const id = await verifiedOperatorCandidate(false);
   await owner.query('UPDATE auth.users SET email_confirmed_at = NULL WHERE id = $1', [id]);
   await expect(assign(`${id}@example.test`)).rejects.toThrow('verified eligible account');
   const duplicateId = await verifiedOperatorCandidate(false);
-  await owner.query('UPDATE auth.users SET email = $1 WHERE id = $2', [`${id}@example.test`, duplicateId]);
+  await owner.query('UPDATE auth.users SET email = $1 WHERE id = $2', [
+    `${id}@example.test`,
+    duplicateId,
+  ]);
   await expect(assign(`${id}@example.test`)).rejects.toThrow('exactly one account');
-  expect((await owner.query('SELECT * FROM ops.operator_accounts WHERE auth_user_id = ANY($1::uuid[])', [[id, duplicateId]])).rowCount).toBe(0);
+  expect(
+    (
+      await owner.query(
+        'SELECT * FROM ops.operator_accounts WHERE auth_user_id = ANY($1::uuid[])',
+        [[id, duplicateId]],
+      )
+    ).rowCount,
+  ).toBe(0);
 });
 
 test('operator provisioning is attributable, idempotent and cannot replay a grant over suspension', async () => {
@@ -529,5 +560,12 @@ test('runtime and public roles cannot provision operators or write audit receipt
     );
     expect(privileges.rows).toEqual([{ execute: false, email_execute: false, insert: false }]);
   }
-  await expect(database.pool.query('SELECT ops.set_operator_status_by_email($1, $2, $3, $4)', [`${id}@example.test`, 'active', 'runtime', 'Self promotion'])).rejects.toMatchObject({ code: '42501' });
+  await expect(
+    database.pool.query('SELECT ops.set_operator_status_by_email($1, $2, $3, $4)', [
+      `${id}@example.test`,
+      'active',
+      'runtime',
+      'Self promotion',
+    ]),
+  ).rejects.toMatchObject({ code: '42501' });
 });
