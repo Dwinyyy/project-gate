@@ -2,7 +2,7 @@
 
 This runbook implements the owner's requested flow: normal registration → owner assignment → main-site password sign-in → required authenticator enrollment/challenge → operator console. Assignment alone grants no authenticated operator session or administrative permissions. See [ADR 0010](../adr/0010-operator-assignment-and-routing.md).
 
-**Deployment prerequisite:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied in managed development. These revised sign-in steps still require deployment of the reviewed frontend/API changes. Until current verification evidence records that deployment, this is a prepared runbook, not a claim that the new flow is live.
+**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. Both frontend aliases and the Render API proxy were verified on commit `5c1bc5c8b1d159a5c7ae494bba78a39ad151ee5f` on 2026-09-24. The owner reported **Main-site operator round trip passed** on that deployment. Mailbox recovery acceptance remains separately required for Task 2.1.
 
 ## Assign an account by email
 
