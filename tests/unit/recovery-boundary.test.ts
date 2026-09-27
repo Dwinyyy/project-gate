@@ -94,6 +94,7 @@ function fixture(options: { factors?: Array<{ factor_type: string; status: strin
       }
       return Response.json({
         id: authUserId,
+        is_anonymous: false,
         email: 'fixture@example.test',
         email_confirmed_at: '2026-09-13T12:00:00.000Z',
         factors,

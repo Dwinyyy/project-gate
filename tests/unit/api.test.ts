@@ -577,6 +577,7 @@ describe('foundation API trust boundaries', () => {
           return new Response(null, { status: 401 });
         return Response.json({
           id: authUserId,
+          is_anonymous: false,
           email: 'operator@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
           factors,

@@ -46,6 +46,7 @@ describe('Supabase access-token verifier', () => {
         token,
         Response.json({
           id: authUserId,
+          is_anonymous: false,
           email: 'operator@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
           factors: [{ id: 'factor-1', factor_type: 'totp', status: 'verified' }],
@@ -80,6 +81,7 @@ describe('Supabase access-token verifier', () => {
         token,
         Response.json({
           id: authUserId,
+          is_anonymous: false,
           email: 'operator@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
           ...(factors === undefined ? {} : { factors }),
@@ -95,7 +97,10 @@ describe('Supabase access-token verifier', () => {
     const verifier = createSupabaseAuthVerifier({
       supabaseUrl: 'https://project.supabase.co',
       publishableKey: 'sb_publishable_example',
-      fetch: providerFetch(token, Response.json({ id: authUserId, factors: 'verified' })),
+      fetch: providerFetch(
+        token,
+        Response.json({ id: authUserId, is_anonymous: false, factors: 'verified' }),
+      ),
     });
     await expect(verifier.verify(token)).resolves.toBeNull();
   });
@@ -112,7 +117,11 @@ describe('Supabase access-token verifier', () => {
       publishableKey: 'sb_publishable_example',
       fetch: providerFetch(
         token,
-        Response.json({ id: authUserId, factors: [{ factor_type: 'totp', status: 'verified' }] }),
+        Response.json({
+          id: authUserId,
+          is_anonymous: false,
+          factors: [{ factor_type: 'totp', status: 'verified' }],
+        }),
       ),
     });
     await expect(verifier.verify(token)).resolves.toMatchObject({
@@ -135,6 +144,7 @@ describe('Supabase access-token verifier', () => {
         token,
         Response.json({
           id: authUserId,
+          is_anonymous: false,
           email: 'player@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
         }),
@@ -153,6 +163,7 @@ describe('Supabase access-token verifier', () => {
         token,
         Response.json({
           id: authUserId,
+          is_anonymous: false,
           email: 'player@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
         }),
@@ -179,6 +190,7 @@ describe('Supabase access-token verifier', () => {
     ['deleted user', { deleted_at: '2026-09-01T00:00:00Z' }, null],
     ['anonymous user', { is_anonymous: true }, null],
     ['invalid ban date', { banned_until: 'not-a-date' }, null],
+    ['impossible ban date', { banned_until: '2026-02-31T00:00:00Z' }, null],
     ['invalid deletion status', { deleted_at: false }, null],
     ['invalid anonymous status', { is_anonymous: 'false' }, null],
   ])(
@@ -219,12 +231,32 @@ describe('Supabase access-token verifier', () => {
         token,
         Response.json({
           id: authUserId,
+          is_anonymous: false,
           email: 'player@example.test',
           email_confirmed_at: '2026-09-13T12:00:00.000Z',
         }),
       ),
     });
 
+    await expect(verifier.verify(token)).resolves.toBeNull();
+  });
+
+  it('rejects a provider user missing its anonymous-status field', async () => {
+    const token = accessToken();
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          email: 'player@example.test',
+          email_confirmed_at: '2026-09-13T12:00:00.000Z',
+          banned_until: null,
+          deleted_at: null,
+        }),
+      ),
+    });
     await expect(verifier.verify(token)).resolves.toBeNull();
   });
 

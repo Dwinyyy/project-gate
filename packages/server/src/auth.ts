@@ -97,11 +97,15 @@ function parseAccessTokenClaims(accessToken: string): AccessTokenClaims | null {
 }
 
 function validProviderTime(value: unknown): value is string {
-  if (
-    typeof value !== 'string' ||
-    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(value)
-  )
-    return false;
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || day < 1 || day > (daysInMonth[month - 1] ?? 0)) return false;
   return Number.isFinite(Date.parse(value));
 }
 
@@ -127,8 +131,7 @@ export function createSupabaseAuthVerifier(options: SupabaseAuthVerifierOptions)
         if (!value || typeof value !== 'object') return null;
         const user = value as Record<string, unknown>;
         if (user.id !== claims.sub) return null;
-        if (user.is_anonymous !== undefined && typeof user.is_anonymous !== 'boolean') return null;
-        if (user.is_anonymous === true) return null;
+        if (user.is_anonymous !== false) return null;
         if (user.deleted_at !== undefined && user.deleted_at !== null) return null;
         if (user.banned_until !== undefined && user.banned_until !== null) {
           if (!validProviderTime(user.banned_until)) return null;
