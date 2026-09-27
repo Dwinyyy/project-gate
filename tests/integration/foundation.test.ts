@@ -48,16 +48,6 @@ beforeAll(async () => {
   await owner.query(
     "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF; END $$",
   );
-  await migrate(connectionString);
-  await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/seed.ts'], {
-    windowsHide: true,
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      MIGRATION_DATABASE_URL: connectionString,
-      DATABASE_URL: runtimeUrl.toString(),
-    },
-  });
   // Minimal provider-owned identity fixture; real Supabase journeys are verified separately.
   await owner.query(`CREATE SCHEMA auth;
     CREATE TABLE auth.users (
@@ -74,6 +64,16 @@ beforeAll(async () => {
       factor_type text NOT NULL,
       status text NOT NULL
     )`);
+  await migrate(connectionString);
+  await promisify(execFile)(process.execPath, ['--import', 'tsx', 'scripts/seed.ts'], {
+    windowsHide: true,
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      MIGRATION_DATABASE_URL: connectionString,
+      DATABASE_URL: runtimeUrl.toString(),
+    },
+  });
 });
 afterAll(async () => {
   await database.close();
@@ -85,6 +85,179 @@ test('the canonical migration creates a private operational schema', async () =>
     "select to_regnamespace('ops')::text as schema",
   );
   expect(result.rows[0]?.schema).toBe('ops');
+});
+
+test('game identities use private tables and safe independent lifecycle defaults', async () => {
+  const account = await owner.query<{ id: string }>(
+    'INSERT INTO game.accounts DEFAULT VALUES RETURNING id',
+  );
+  const accountId = account.rows[0]!.id;
+  try {
+    const character = await owner.query<{
+      id: string;
+      life_state: string;
+      awakening_state: string;
+      presence_state: string;
+      profile_visibility: string;
+    }>('INSERT INTO game.characters(account_id, display_alias) VALUES ($1, $2) RETURNING *', [
+      accountId,
+      'First civilian',
+    ]);
+    expect(character.rows[0]).toMatchObject({
+      life_state: 'alive',
+      awakening_state: 'unawakened',
+      presence_state: 'sheltered',
+      profile_visibility: 'private',
+    });
+    expect(character.rows[0]?.id).toBeTruthy();
+    expect(
+      (await owner.query("SELECT to_regnamespace('game')::text AS schema")).rows[0]?.schema,
+    ).toBe('game');
+    for (const role of ['anon', 'authenticated']) {
+      const access = await owner.query(
+        "SELECT has_schema_privilege($1, 'game', 'USAGE') AS schema, has_table_privilege($1, 'game.accounts', 'SELECT') AS accounts, has_table_privilege($1, 'game.characters', 'SELECT') AS characters",
+        [role],
+      );
+      expect(access.rows).toEqual([{ schema: false, accounts: false, characters: false }]);
+    }
+  } finally {
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('a living or incapacitated character occupies the account slot while dead history remains', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  try {
+    const first = (
+      await owner.query<{ id: string }>(
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'First') RETURNING id",
+        [accountId],
+      )
+    ).rows[0]!.id;
+    await expect(
+      owner.query("INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Second')", [
+        accountId,
+      ]),
+    ).rejects.toMatchObject({ code: '23505' });
+    await owner.query("UPDATE game.characters SET life_state = 'incapacitated' WHERE id = $1", [
+      first,
+    ]);
+    await expect(
+      owner.query("INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Second')", [
+        accountId,
+      ]),
+    ).rejects.toMatchObject({ code: '23505' });
+    await owner.query("UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [first]);
+    await owner.query(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Second')",
+      [accountId],
+    );
+    expect(
+      (
+        await owner.query(
+          'SELECT life_state FROM game.characters WHERE account_id = $1 ORDER BY created_at, id',
+          [accountId],
+        )
+      ).rows
+        .map((row) => row.life_state)
+        .sort(),
+    ).toEqual(['alive', 'dead']);
+  } finally {
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('invalid character values and missing parent accounts fail at the database boundary', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  try {
+    for (const column of [
+      'life_state',
+      'awakening_state',
+      'presence_state',
+      'profile_visibility',
+    ]) {
+      await expect(
+        owner.query(
+          `INSERT INTO game.characters(account_id, display_alias, ${column}) VALUES ($1, 'Invalid', 'invalid')`,
+          [accountId],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+    }
+    for (const alias of ['', ' ', 'x'.repeat(41)]) {
+      await expect(
+        owner.query('INSERT INTO game.characters(account_id, display_alias) VALUES ($1, $2)', [
+          accountId,
+          alias,
+        ]),
+      ).rejects.toMatchObject({ code: '23514' });
+    }
+    await expect(
+      owner.query("INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Orphan')", [
+        randomUUID(),
+      ]),
+    ).rejects.toMatchObject({ code: '23503' });
+    await expect(
+      owner.query('INSERT INTO game.accounts(revision) VALUES (-1)'),
+    ).rejects.toMatchObject({ code: '23514' });
+  } finally {
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('Auth deletion detaches only the login and cannot transfer history by email', async () => {
+  const authId = randomUUID();
+  const replacementId = randomUUID();
+  const email = `${authId}@example.test`;
+  await owner.query('INSERT INTO auth.users(id, email) VALUES ($1, $2)', [authId, email]);
+  const linkedId = (
+    await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+      [authId],
+    )
+  ).rows[0]!.id;
+  const detachedId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  const characterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'History') RETURNING id",
+      [linkedId],
+    )
+  ).rows[0]!.id;
+  try {
+    await expect(
+      owner.query('INSERT INTO game.accounts(auth_user_id) VALUES ($1)', [authId]),
+    ).rejects.toMatchObject({ code: '23505' });
+    await expect(
+      owner.query('DELETE FROM game.accounts WHERE id = $1', [linkedId]),
+    ).rejects.toMatchObject({ code: '23001' });
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [authId]);
+    expect(
+      (await owner.query('SELECT auth_user_id FROM game.accounts WHERE id = $1', [linkedId])).rows,
+    ).toEqual([{ auth_user_id: null }]);
+    expect(
+      (await owner.query('SELECT id FROM game.characters WHERE account_id = $1', [linkedId])).rows,
+    ).toEqual([{ id: characterId }]);
+    await owner.query('INSERT INTO auth.users(id, email) VALUES ($1, $2)', [replacementId, email]);
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [replacementId]))
+        .rowCount,
+    ).toBe(0);
+  } finally {
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [linkedId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = ANY($1::uuid[])', [
+      [linkedId, detachedId],
+    ]);
+    await owner.query('DELETE FROM auth.users WHERE id = ANY($1::uuid[])', [
+      [authId, replacementId],
+    ]);
+  }
 });
 
 test('runtime readiness requires the private schema and cannot use migration-owner authority', async () => {
