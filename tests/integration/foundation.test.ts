@@ -151,20 +151,185 @@ test('a living or incapacitated character occupies the account slot while dead h
       ]),
     ).rejects.toMatchObject({ code: '23505' });
     await owner.query("UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [first]);
-    await owner.query(
-      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Second')",
-      [accountId],
+    const second = (
+      await owner.query<{ id: string }>(
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Second') RETURNING id",
+        [accountId],
+      )
+    ).rows[0]!.id;
+    expect(
+      (
+        await owner.query('SELECT id, life_state FROM game.characters WHERE account_id = $1', [
+          accountId,
+        ])
+      ).rows.sort((left, right) => String(left.id).localeCompare(String(right.id))),
+    ).toEqual(
+      [
+        { id: first, life_state: 'dead' },
+        { id: second, life_state: 'alive' },
+      ].sort((left, right) => left.id.localeCompare(right.id)),
     );
+  } finally {
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('independent connections racing to create characters leave one living slot occupied', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  const firstConnection = await owner.connect();
+  const secondConnection = await owner.connect();
+  try {
+    const attempts = await Promise.allSettled([
+      firstConnection.query(
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Racer one') RETURNING id",
+        [accountId],
+      ),
+      secondConnection.query(
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Racer two') RETURNING id",
+        [accountId],
+      ),
+    ]);
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 'rejected')).toMatchObject([
+      { reason: { code: '23505' } },
+    ]);
     expect(
       (
         await owner.query(
-          'SELECT life_state FROM game.characters WHERE account_id = $1 ORDER BY created_at, id',
+          "SELECT id FROM game.characters WHERE account_id = $1 AND life_state IN ('alive', 'incapacitated')",
           [accountId],
         )
-      ).rows
-        .map((row) => row.life_state)
-        .sort(),
-    ).toEqual(['alive', 'dead']);
+      ).rowCount,
+    ).toBe(1);
+  } finally {
+    firstConnection.release();
+    secondConnection.release();
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('awakening, presence and visibility changes cannot free the living slot', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  try {
+    const characterId = (
+      await owner.query<{ id: string }>(
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Civilian') RETURNING id",
+        [accountId],
+      )
+    ).rows[0]!.id;
+    for (const [column, value] of [
+      ['awakening_state', 'awakened'],
+      ['presence_state', 'committed'],
+      ['profile_visibility', 'public'],
+    ]) {
+      await owner.query(`UPDATE game.characters SET ${column} = $1 WHERE id = $2`, [
+        value,
+        characterId,
+      ]);
+      await expect(
+        owner.query(
+          "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Second')",
+          [accountId],
+        ),
+      ).rejects.toMatchObject({ code: '23505' });
+    }
+    expect(
+      (
+        await owner.query(
+          'SELECT life_state, awakening_state, presence_state, profile_visibility FROM game.characters WHERE id = $1',
+          [characterId],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        life_state: 'alive',
+        awakening_state: 'awakened',
+        presence_state: 'committed',
+        profile_visibility: 'public',
+      },
+    ]);
+  } finally {
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('public roles cannot read game identity and runtime remains read only', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  const characterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Private') RETURNING id",
+      [accountId],
+    )
+  ).rows[0]!.id;
+  try {
+    for (const role of ['anon', 'authenticated']) {
+      const privileges = await owner.query(
+        "SELECT has_schema_privilege($1, 'game', 'USAGE') AS schema, has_table_privilege($1, 'game.accounts', 'SELECT') AS accounts_read, has_table_privilege($1, 'game.characters', 'SELECT') AS characters_read, has_table_privilege($1, 'game.accounts', 'INSERT,UPDATE,DELETE') AS accounts_write, has_table_privilege($1, 'game.characters', 'INSERT,UPDATE,DELETE') AS characters_write",
+        [role],
+      );
+      expect(privileges.rows).toEqual([
+        {
+          schema: false,
+          accounts_read: false,
+          characters_read: false,
+          accounts_write: false,
+          characters_write: false,
+        },
+      ]);
+      const roleConnection = await owner.connect();
+      try {
+        await roleConnection.query('BEGIN');
+        await roleConnection.query(`SET LOCAL ROLE ${role}`);
+        for (const table of ['accounts', 'characters']) {
+          await expect(roleConnection.query(`SELECT id FROM game.${table}`)).rejects.toMatchObject({
+            code: '42501',
+          });
+          await roleConnection.query('ROLLBACK');
+          await roleConnection.query('BEGIN');
+          await roleConnection.query(`SET LOCAL ROLE ${role}`);
+        }
+      } finally {
+        await roleConnection.query('ROLLBACK');
+        roleConnection.release();
+      }
+    }
+    expect(
+      (await database.pool.query('SELECT id FROM game.accounts WHERE id = $1', [accountId])).rows,
+    ).toEqual([{ id: accountId }]);
+    expect(
+      (await database.pool.query('SELECT id FROM game.characters WHERE id = $1', [characterId]))
+        .rows,
+    ).toEqual([{ id: characterId }]);
+    const forbiddenWrites: [string, string[]][] = [
+      ['INSERT INTO game.accounts DEFAULT VALUES', []],
+      [
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Forbidden')",
+        [accountId],
+      ],
+      ['UPDATE game.accounts SET revision = revision + 1 WHERE id = $1', [accountId]],
+      ['UPDATE game.characters SET account_id = $1 WHERE id = $2', [randomUUID(), characterId]],
+      ['DELETE FROM game.characters WHERE id = $1', [characterId]],
+      ['DELETE FROM game.accounts WHERE id = $1', [accountId]],
+    ];
+    for (const [query, values] of forbiddenWrites) {
+      await expect(database.pool.query(query, values)).rejects.toMatchObject({ code: '42501' });
+    }
+    expect(
+      (await owner.query('SELECT account_id FROM game.characters WHERE id = $1', [characterId]))
+        .rows,
+    ).toEqual([{ account_id: accountId }]);
+    expect((await owner.query('SELECT characters FROM ops.feature_controls')).rows).toEqual([
+      { characters: false },
+    ]);
   } finally {
     await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
     await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
