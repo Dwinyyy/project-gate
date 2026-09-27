@@ -2,7 +2,7 @@
 
 This runbook implements the owner's requested flow: normal registration → owner assignment → main-site password sign-in → required authenticator enrollment/challenge → operator console. Assignment alone grants no authenticated operator session or administrative permissions. See [ADR 0010](../adr/0010-operator-assignment-and-routing.md).
 
-**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. Both frontend aliases and the Render API proxy were verified on commit `5c1bc5c8b1d159a5c7ae494bba78a39ad151ee5f` on 2026-09-24. The owner reported **Main-site operator round trip passed** on that deployment. The owner also reported **Enrolled recovery passed** on 2026-09-24. The owner subsequently reported **Unenrolled recovery passed**. Approved mobile/private-entry and password-confirmation changes are in progress; the instructions below describe the currently deployed checkpoint.
+**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. The revised main-site bundle and neutral retired-host page are deployed at `bbb52ed` (2026-09-27). Automated and anonymous live checks passed; the owner's password/TOTP round trip on this new route is pending. The owner previously passed the main-site operator round trip and both recovery journeys on `5c1bc5c`.
 
 ## Assign an account by email
 
@@ -38,13 +38,13 @@ After an authentication deployment, close or reload older player/operator tabs b
 
 1. Open [main-site sign-in](https://project-gate-player.vercel.app/account/sign-in).
 2. Enter **Email address** and **Password**, then click **Sign in**.
-3. An assigned operator is sent to `/operator/` on the same site. A normal player stays in the player application. The main-site login is reused; the operator page does not ask for that password a second time.
+3. An assigned operator is sent to `/_system/console/` on the same site. A normal player stays in the player application. The main-site login is reused; the operator page does not ask for that password a second time.
 4. On first use, click **Set up authenticator**. In your authenticator app choose its add-account/scan-QR action and scan the displayed QR. Keep setup material private.
 5. Enter **Six-digit code**, then click **Verify authenticator**. If already enrolled, complete this challenge without adding another authenticator.
 6. Expect **AAL2 · Authorized** and **Operator session authorized.**
 7. Click **Sign out**, return to main-site sign-in and repeat the password/code challenge. A password-only session must never open authorized operator content.
 
-The standalone [operator preview](https://project-gate-operator.vercel.app) remains available. It has its own browser origin, so a main-site login does not automatically appear there. Use the main-site `/operator/` route for the seamless flow requested here.
+The old [standalone operator address](https://project-gate-operator.vercel.app) now serves only a neutral handoff to main-site sign-in. The maintained operator interface is embedded in the main site. The old hosting project remains until the owner deletes it using the steps below.
 
 Ordinary sign-out revokes the session that started it. Password replacement requests global revocation of that account's refresh sessions, including a newer login to the same account. A concurrent different-account login must be preserved. If the provider cannot confirm revocation, the app reports the partial outcome rather than claiming complete sign-out.
 
@@ -85,7 +85,7 @@ Record nonsecret build revisions, receipt IDs and outcomes. The actual owner-ent
 
 Owner request, 2026-09-25: after the main-site operator panel works independently, remove `https://project-gate-operator.vercel.app/` as an accessible website. The owner will perform the deletion. No hosting project has been deleted by this task.
 
-**Prerequisite:** the revised player deployment must be verified first, including its embedded operator assets, same-site entry, authentication boundary and registration confirmation. Preparation and local tests alone do not satisfy this prerequisite. The main site must make no production request to the standalone operator host. The operator source directory remains part of the repository because the main-site build compiles it directly.
+**Prerequisite:** the revised player deployment must be verified first, including its embedded operator assets, same-site entry, authentication boundary and registration confirmation. The owner must also pass a fresh password/TOTP sign-in, authorization, sign-out and reauthentication round trip on the new `/_system/console/` route. Preparation, automated tests and anonymous live checks alone do not satisfy this private-authentication prerequisite. The main site must make no production request to the standalone operator host. The operator source directory remains part of the repository because the main-site build compiles it directly.
 
 After Codex reports this prerequisite verified, remove any retired Auth redirect origin, then delete the old Vercel project:
 
