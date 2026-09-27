@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { prepareOperatorStatusChange } from '../../scripts/lib/operator-provisioning.js';
 import {
   createDatabase,
+  createCharacterStore,
   findActiveOperator,
+  findOperatorStatus,
   getFeatureControls,
   withTransaction,
 } from '../../packages/database/src/index.js';
@@ -886,6 +888,8 @@ test('operator access is private, current, and read-only to the runtime', async 
     [authUserId],
   );
   try {
+    await expect(findOperatorStatus(database.pool, authUserId)).resolves.toBe('active');
+    await expect(findOperatorStatus(database.pool, randomUUID())).resolves.toBeNull();
     await expect(findActiveOperator(database.pool, authUserId)).resolves.toEqual({
       authUserId,
       permissions: ['feature_controls:read'],
@@ -895,6 +899,7 @@ test('operator access is private, current, and read-only to the runtime', async 
       [authUserId],
     );
     await expect(findActiveOperator(database.pool, authUserId)).resolves.toBeNull();
+    await expect(findOperatorStatus(database.pool, authUserId)).resolves.toBe('suspended');
     await expect(
       database.pool.query(
         "INSERT INTO ops.operator_accounts(auth_user_id, status) VALUES ($1, 'active')",
@@ -927,6 +932,499 @@ async function verifiedOperatorCandidate(withMfa = true): Promise<string> {
   }
   return id;
 }
+
+const characterStore = createCharacterStore(database.pool);
+
+async function characterCandidate(email = `${randomUUID()}@example.test`): Promise<string> {
+  const id = randomUUID();
+  await owner.query(
+    'INSERT INTO auth.users(id, email, email_confirmed_at) VALUES ($1, $2, now())',
+    [id, email],
+  );
+  return id;
+}
+
+async function removeCharacterCandidate(id: string): Promise<void> {
+  await owner.query(
+    'DELETE FROM game.character_creation_receipts WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
+    [id],
+  );
+  await owner.query(
+    'DELETE FROM game.characters WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
+    [id],
+  );
+  await owner.query('DELETE FROM game.accounts WHERE auth_user_id = $1', [id]);
+  await owner.query('DELETE FROM ops.operator_accounts WHERE auth_user_id = $1', [id]);
+  await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
+}
+
+test('character eligibility reads no account and respects feature state without writing', async () => {
+  const id = await characterCandidate();
+  try {
+    expect(await characterStore.getMe(id)).toMatchObject({
+      kind: 'player',
+      schemaVersion: 1,
+      character: null,
+      creation: { status: 'feature_disabled', notBefore: null },
+    });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    expect(await characterStore.getMe(id)).toMatchObject({
+      character: null,
+      creation: { status: 'available', notBefore: null },
+    });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('character creation links a verified UUID once and replays the same receipt after disable', async () => {
+  const id = await characterCandidate();
+  const operationId = randomUUID();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const first = await characterStore.create(id, 'Civilian', operationId);
+    expect(first).toMatchObject({ kind: 'created', operationId, replayed: false });
+    expect(await characterStore.getMe(id)).toMatchObject({
+      creation: { status: 'occupied' },
+      character: {
+        id: first.kind === 'created' ? first.characterId : '',
+        displayAlias: 'Civilian',
+        lifeState: 'alive',
+        awakeningState: 'unawakened',
+        presenceState: 'sheltered',
+        profileVisibility: 'private',
+      },
+    });
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    expect(await characterStore.create(id, 'Civilian', operationId)).toEqual({
+      ...first,
+      replayed: true,
+    });
+    expect(await characterStore.create(id, 'Changed', operationId)).toEqual({
+      kind: 'operation_conflict',
+    });
+    expect(await characterStore.getMe(id)).toMatchObject({
+      character: { id: first.kind === 'created' ? first.characterId : '' },
+      creation: { status: 'feature_disabled' },
+    });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(1);
+    expect(
+      (await owner.query('SELECT id FROM game.characters')).rows.filter(
+        (row) => row.id === (first.kind === 'created' ? first.characterId : ''),
+      ),
+    ).toHaveLength(1);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('active and suspended operators cannot read or create player identity', async () => {
+  const id = await characterCandidate();
+  try {
+    await owner.query(
+      "INSERT INTO ops.operator_accounts(auth_user_id, status) VALUES ($1, 'active')",
+      [id],
+    );
+    expect(await characterStore.getMe(id)).toEqual({ kind: 'operator_only' });
+    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({
+      kind: 'operator_only',
+    });
+    await owner.query(
+      "UPDATE ops.operator_accounts SET status = 'suspended' WHERE auth_user_id = $1",
+      [id],
+    );
+    expect(await characterStore.getMe(id)).toEqual({ kind: 'operator_only' });
+    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({
+      kind: 'operator_only',
+    });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+  } finally {
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('same-key and different-key concurrent creates preserve one living slot', async () => {
+  const id = await characterCandidate();
+  const otherId = await characterCandidate();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const sameKey = randomUUID();
+    const same = await Promise.all([
+      characterStore.create(id, 'Civilian', sameKey),
+      characterStore.create(id, 'Civilian', sameKey),
+    ]);
+    expect(same.map((result) => result.kind)).toEqual(['created', 'created']);
+    expect(same.filter((result) => result.kind === 'created' && result.replayed)).toHaveLength(1);
+    const different = await Promise.all([
+      characterStore.create(otherId, 'Other', randomUUID()),
+      characterStore.create(otherId, 'Other', randomUUID()),
+    ]);
+    expect(different.filter((result) => result.kind === 'created')).toHaveLength(1);
+    expect(different.filter((result) => result.kind === 'occupied')).toHaveLength(1);
+    expect(
+      (
+        await owner.query(
+          "SELECT id FROM game.characters WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1) AND life_state IN ('alive', 'incapacitated')",
+          [id],
+        )
+      ).rowCount,
+    ).toBe(1);
+    expect(
+      (
+        await owner.query(
+          "SELECT id FROM game.characters WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1) AND life_state IN ('alive', 'incapacitated')",
+          [otherId],
+        )
+      ).rowCount,
+    ).toBe(1);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+    await removeCharacterCandidate(otherId);
+  }
+});
+
+test('unverified, banned, and missing Auth identities cannot gain or replay a receipt', async () => {
+  const id = randomUUID();
+  await owner.query('INSERT INTO auth.users(id, email) VALUES ($1, $2)', [
+    id,
+    `${id}@example.test`,
+  ]);
+  const key = randomUUID();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    expect(await characterStore.getMe(id)).toEqual({ kind: 'auth_ineligible' });
+    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'auth_ineligible' });
+    await owner.query('UPDATE auth.users SET email_confirmed_at = now() WHERE id = $1', [id]);
+    expect(await characterStore.create(id, 'Civilian', key)).toMatchObject({ kind: 'created' });
+    await owner.query(
+      "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
+      [id],
+    );
+    expect(await characterStore.getMe(id)).toEqual({ kind: 'auth_ineligible' });
+    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'auth_ineligible' });
+    expect(await characterStore.create(randomUUID(), 'Civilian', randomUUID())).toEqual({
+      kind: 'auth_ineligible',
+    });
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('incapacitation occupies the slot; dead history stays private through cooldown', async () => {
+  const id = await characterCandidate();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const first = await characterStore.create(id, 'First', randomUUID());
+    expect(first.kind).toBe('created');
+    if (first.kind !== 'created') return;
+    await owner.query("UPDATE game.characters SET life_state = 'incapacitated' WHERE id = $1", [
+      first.characterId,
+    ]);
+    expect(await characterStore.getMe(id)).toMatchObject({
+      character: { id: first.characterId, lifeState: 'incapacitated' },
+      creation: { status: 'occupied' },
+    });
+    expect(await characterStore.create(id, 'Second', randomUUID())).toEqual({ kind: 'occupied' });
+    await owner.query("UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [
+      first.characterId,
+    ]);
+    await owner.query(
+      "UPDATE game.accounts SET character_creation_not_before = clock_timestamp() + interval '1 hour' WHERE auth_user_id = $1",
+      [id],
+    );
+    const me = await characterStore.getMe(id);
+    expect(me).toMatchObject({ character: null, creation: { status: 'cooldown' } });
+    expect(await characterStore.create(id, 'Second', randomUUID())).toMatchObject({
+      kind: 'cooldown',
+    });
+    await owner.query(
+      "UPDATE game.accounts SET character_creation_not_before = clock_timestamp() - interval '1 millisecond' WHERE auth_user_id = $1",
+      [id],
+    );
+    expect(await characterStore.getMe(id)).toMatchObject({ creation: { status: 'available' } });
+    const second = await characterStore.create(id, 'Second', randomUUID());
+    expect(second).toMatchObject({ kind: 'created', replayed: false });
+    expect(
+      (
+        await owner.query(
+          'SELECT id, life_state FROM game.characters WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
+          [id],
+        )
+      ).rows,
+    ).toMatchObject([
+      { id: first.characterId, life_state: 'dead' },
+      { id: second.kind === 'created' ? second.characterId : '', life_state: 'alive' },
+    ]);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('a new Auth UUID with the same email never inherits detached character history', async () => {
+  const email = `${randomUUID()}@example.test`;
+  const oldId = await characterCandidate(email);
+  let newId: string | null = null;
+  let oldAccountId: string | null = null;
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const old = await characterStore.create(oldId, 'Old life', randomUUID());
+    expect(old.kind).toBe('created');
+    oldAccountId = (
+      await owner.query<{ id: string }>('SELECT id FROM game.accounts WHERE auth_user_id = $1', [
+        oldId,
+      ])
+    ).rows[0]!.id;
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [oldId]);
+    newId = await characterCandidate(email);
+    expect(await characterStore.getMe(newId)).toMatchObject({
+      character: null,
+      creation: { status: 'available' },
+    });
+    const fresh = await characterStore.create(newId, 'New life', randomUUID());
+    expect(fresh).toMatchObject({ kind: 'created' });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [newId])).rows[0]
+        ?.id,
+    ).not.toBe(oldAccountId);
+    expect(
+      (await owner.query('SELECT auth_user_id FROM game.accounts WHERE id = $1', [oldAccountId]))
+        .rows,
+    ).toEqual([{ auth_user_id: null }]);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    if (newId) await removeCharacterCandidate(newId);
+    if (oldAccountId) {
+      await owner.query('DELETE FROM game.character_creation_receipts WHERE account_id = $1', [
+        oldAccountId,
+      ]);
+      await owner.query('DELETE FROM game.characters WHERE account_id = $1', [oldAccountId]);
+      await owner.query('DELETE FROM game.accounts WHERE id = $1', [oldAccountId]);
+    }
+  }
+});
+
+test('failed receipt insertion rolls back first link and character', async () => {
+  const id = await characterCandidate();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await owner.query(
+      `CREATE FUNCTION game.reject_test_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'receipt rejected'; END $$`,
+    );
+    await owner.query(
+      'CREATE TRIGGER reject_test_receipt BEFORE INSERT ON game.character_creation_receipts FOR EACH ROW EXECUTE FUNCTION game.reject_test_receipt()',
+    );
+    await expect(characterStore.create(id, 'Civilian', randomUUID())).rejects.toThrow(
+      'receipt rejected',
+    );
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+    expect(
+      (await owner.query('SELECT operation_id FROM game.character_creation_receipts')).rowCount,
+    ).toBe(0);
+  } finally {
+    await owner.query(
+      'DROP TRIGGER IF EXISTS reject_test_receipt ON game.character_creation_receipts',
+    );
+    await owner.query('DROP FUNCTION IF EXISTS game.reject_test_receipt()');
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+async function waitForBlockedQuery(fragment: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const waiting = await owner.query<{ blocked: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM pg_stat_activity
+          WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock'
+            AND position($1 IN query) > 0
+       ) AS blocked`,
+      [fragment],
+    );
+    if (waiting.rows[0]?.blocked) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for blocked query: ${fragment}`);
+}
+
+test('audited operator assignment ordered first denies a waiting creation', async () => {
+  const id = await characterCandidate();
+  const blocker = await owner.connect();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await blocker.query('BEGIN');
+    await blocker.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended('operator-account:' || $1::uuid::text, 0))",
+      [id],
+    );
+    await blocker.query(prepareOperatorStatusChange(operatorRequest(id)));
+    const create = characterStore.create(id, 'Civilian', randomUUID());
+    await waitForBlockedQuery('operator-account:');
+    await blocker.query('COMMIT');
+    expect(await create).toEqual({ kind: 'operator_only' });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('creation ordered first commits before audited operator assignment', async () => {
+  const id = await characterCandidate();
+  const blocker = await owner.connect();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT singleton FROM ops.feature_controls WHERE singleton FOR UPDATE');
+    const create = characterStore.create(id, 'Civilian', randomUUID());
+    await waitForBlockedQuery('FROM ops.feature_controls WHERE singleton FOR SHARE');
+    const assignment = owner.query(prepareOperatorStatusChange(operatorRequest(id)));
+    void assignment.catch(() => undefined);
+    await waitForBlockedQuery('SELECT ops.set_operator_status');
+    await blocker.query('COMMIT');
+    expect(await create).toMatchObject({ kind: 'created' });
+    await assignment;
+    expect(await characterStore.getMe(id)).toEqual({ kind: 'operator_only' });
+    expect(await characterStore.create(id, 'Another', randomUUID())).toEqual({
+      kind: 'operator_only',
+    });
+    expect(
+      (
+        await owner.query(
+          "SELECT id FROM game.characters WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1) AND life_state IN ('alive', 'incapacitated')",
+          [id],
+        )
+      ).rowCount,
+    ).toBe(1);
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('feature disable ordered first denies a waiting creation', async () => {
+  const id = await characterCandidate();
+  const blocker = await owner.connect();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await blocker.query('BEGIN');
+    await blocker.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    const create = characterStore.create(id, 'Civilian', randomUUID());
+    await waitForBlockedQuery('FROM ops.feature_controls WHERE singleton FOR SHARE');
+    await blocker.query('COMMIT');
+    expect(await create).toEqual({ kind: 'disabled' });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('creation ordered first commits before feature disable', async () => {
+  const id = await characterCandidate();
+  const blocker = await owner.connect();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await blocker.query('BEGIN');
+    await blocker.query('UPDATE auth.users SET banned_until = NULL WHERE id = $1', [id]);
+    const create = characterStore.create(id, 'Civilian', randomUUID());
+    await waitForBlockedQuery('lock_eligible_auth_user');
+    const disable = owner.query(
+      'UPDATE ops.feature_controls SET characters = false WHERE singleton',
+    );
+    await waitForBlockedQuery('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await blocker.query('COMMIT');
+    expect(await create).toMatchObject({ kind: 'created' });
+    await disable;
+    expect(await characterStore.getMe(id)).toMatchObject({
+      creation: { status: 'feature_disabled' },
+    });
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('provider ban ordered first denies a waiting creation', async () => {
+  const id = await characterCandidate();
+  const blocker = await owner.connect();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await blocker.query('BEGIN');
+    await blocker.query(
+      "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
+      [id],
+    );
+    const create = characterStore.create(id, 'Civilian', randomUUID());
+    await waitForBlockedQuery('lock_eligible_auth_user');
+    await blocker.query('COMMIT');
+    expect(await create).toEqual({ kind: 'auth_ineligible' });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('creation ordered first commits before provider ban', async () => {
+  const id = await characterCandidate();
+  const blocker = await owner.connect();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await owner.query('INSERT INTO game.accounts(auth_user_id) VALUES ($1)', [id]);
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT id FROM game.accounts WHERE auth_user_id = $1 FOR UPDATE', [id]);
+    const create = characterStore.create(id, 'Civilian', randomUUID());
+    await waitForBlockedQuery('FROM game.accounts WHERE auth_user_id =');
+    const ban = owner.query(
+      "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
+      [id],
+    );
+    await waitForBlockedQuery('UPDATE auth.users SET banned_until');
+    await blocker.query('COMMIT');
+    expect(await create).toMatchObject({ kind: 'created' });
+    await ban;
+    expect(await characterStore.getMe(id)).toEqual({ kind: 'auth_ineligible' });
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
 
 function operatorRequest(authUserId: string, status: 'active' | 'suspended' = 'active') {
   return {
