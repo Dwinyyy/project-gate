@@ -58,6 +58,7 @@ describe('Vercel frontend configuration', () => {
         destination: 'https://hunter-api.onrender.com/v1/:path*',
       },
       { source: '/operator', destination: '/_legacy/operator/index.html' },
+      { source: '/operator/', destination: '/_legacy/operator/index.html' },
       { source: '/operator/:path*', destination: '/_legacy/operator/index.html' },
       { source: '/_system/console', destination: '/_system/console/index.html' },
       {
@@ -122,7 +123,7 @@ describe('Vercel frontend configuration', () => {
     // @vercel/config 0.7.0 wraps Vercel's documented named `config` export.
     const config = compiled.config ?? compiled;
 
-    expect(config.rewrites).toHaveLength(app === 'player' ? 5 : 1);
+    expect(config.rewrites).toHaveLength(app === 'player' ? 6 : 1);
     expect(config.redirects).toBeUndefined();
   });
 });

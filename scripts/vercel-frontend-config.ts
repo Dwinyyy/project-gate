@@ -65,6 +65,7 @@ export function createVercelFrontendConfig(
       ...(options.embeddedOperator
         ? [
             routes.rewrite('/operator', `${RETIRED_OPERATOR_BRIDGE}index.html`),
+            routes.rewrite('/operator/', `${RETIRED_OPERATOR_BRIDGE}index.html`),
             routes.rewrite('/operator/:path*', `${RETIRED_OPERATOR_BRIDGE}index.html`),
             routes.rewrite(operatorPrefix, `${operatorPrefix}/index.html`),
             routes.rewrite(
