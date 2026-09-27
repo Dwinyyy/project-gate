@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { config as operatorConfig } from '../../apps/operator/vercel.js';
 import { config as playerConfig } from '../../apps/player/vercel.js';
 import { createVercelFrontendConfig } from '../../scripts/vercel-frontend-config.js';
+import { OPERATOR_PATH } from '../../packages/contracts/src/navigation.js';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const configCli = resolve(
@@ -46,20 +47,27 @@ describe('Vercel frontend configuration', () => {
   });
 
   it('routes the embedded operator entry separately from the player SPA', () => {
+    expect(OPERATOR_PATH).toBe('/_system/console/');
     const config = createVercelFrontendConfig('https://hunter-api.onrender.com', {
       embeddedOperator: true,
     });
+    expect(config.redirects).toBeUndefined();
     expect(config.rewrites).toEqual([
       {
         source: '/v1/:path*',
         destination: 'https://hunter-api.onrender.com/v1/:path*',
       },
-      { source: '/operator', destination: '/operator/index.html' },
+      { source: '/operator', destination: '/_legacy/operator/index.html' },
+      { source: '/operator/:path*', destination: '/_legacy/operator/index.html' },
+      { source: '/_system/console', destination: '/_system/console/index.html' },
       {
-        source: '/operator/:path((?!assets(?:/|$)).*)',
-        destination: '/operator/index.html',
+        source: '/_system/console/:path((?!assets(?:/|$)).*)',
+        destination: '/_system/console/index.html',
       },
-      { source: '/:path((?!v1(?:/|$)|operator(?:/|$)).*)', destination: '/index.html' },
+      {
+        source: '/:path((?!v1(?:/|$)|_system/console(?:/|$)|operator(?:/|$)).*)',
+        destination: '/index.html',
+      },
     ]);
   });
 
@@ -89,9 +97,12 @@ describe('Vercel frontend configuration', () => {
     });
     expect(config.rewrites?.at(-1)).toEqual({
       source:
-        _name === 'player' ? '/:path((?!v1(?:/|$)|operator(?:/|$)).*)' : '/:path((?!v1(?:/|$)).*)',
+        _name === 'player'
+          ? '/:path((?!v1(?:/|$)|_system/console(?:/|$)|operator(?:/|$)).*)'
+          : '/:path*',
       destination: '/index.html',
     });
+    expect(config.redirects).toBeUndefined();
   });
 
   it.each(['player', 'operator'])('loads the %s config through the pinned package CLI', (app) => {
@@ -104,12 +115,14 @@ describe('Vercel frontend configuration', () => {
       env: environment,
     });
     const compiled = JSON.parse(output) as {
-      config?: { rewrites?: unknown[] };
+      config?: { rewrites?: unknown[]; redirects?: unknown[] };
       rewrites?: unknown[];
+      redirects?: unknown[];
     };
     // @vercel/config 0.7.0 wraps Vercel's documented named `config` export.
     const config = compiled.config ?? compiled;
 
-    expect(config.rewrites).toHaveLength(app === 'player' ? 3 : 1);
+    expect(config.rewrites).toHaveLength(app === 'player' ? 5 : 1);
+    expect(config.redirects).toBeUndefined();
   });
 });

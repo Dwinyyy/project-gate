@@ -13,7 +13,7 @@ type OperatorSession = Awaited<ReturnType<typeof getOperatorSession>>;
 
 export type OperatorAuthView =
   | { phase: 'initializing' }
-  | { phase: 'anonymous' }
+  | { phase: 'redirect'; to: '/account/sign-in' | '/account/recovery' | '/' }
   | { phase: 'mfa-enrollment'; enrollment: TotpEnrollment | null }
   | { phase: 'mfa-challenge'; factorId: string }
   | { phase: 'authorization-check' }
@@ -26,7 +26,6 @@ export interface OperatorAuthModel {
   email: string | null;
   busy: boolean;
   error: string | null;
-  signIn(email: string, password: string): Promise<void>;
   beginEnrollment(): Promise<void>;
   verify(code: string): Promise<void>;
   retryVerification(): void;
@@ -87,6 +86,8 @@ export function useOperatorAuth(): OperatorAuthModel {
   const [error, setError] = useState<string | null>(null);
   const processedToken = useRef<string | null>(null);
   const revision = useRef(0);
+  const signOutPending = useRef(false);
+  const signOutFailed = useRef(false);
   const [verificationAttempt, setVerificationAttempt] = useState(0);
   const authPhase = auth.phase;
   const accessToken = auth.accessToken;
@@ -128,19 +129,23 @@ export function useOperatorAuth(): OperatorAuthModel {
     if (authPhase === 'anonymous') {
       revision.current += 1;
       processedToken.current = null;
-      setView({ phase: 'anonymous' });
+      setViewToken(null);
+      if (signOutFailed.current) return;
+      setView(
+        signOutPending.current
+          ? { phase: 'authorization-check' }
+          : { phase: 'redirect', to: '/account/sign-in' },
+      );
       setError(null);
       return;
     }
     if (authPhase === 'recovery' || authPhase === 'restricted') {
       revision.current += 1;
       processedToken.current = null;
+      setViewToken(token);
       setView({
-        phase: 'denied',
-        message:
-          authPhase === 'recovery'
-            ? 'Password recovery sessions cannot access the operator workspace.'
-            : 'Sign in with your password before accessing the operator workspace.',
+        phase: 'redirect',
+        to: authPhase === 'recovery' ? '/account/recovery' : '/account/sign-in',
       });
       setError(null);
       return;
@@ -154,6 +159,7 @@ export function useOperatorAuth(): OperatorAuthModel {
       });
       return;
     }
+    signOutFailed.current = false;
     if (processedToken.current === token) return;
     processedToken.current = token;
     setViewToken(token);
@@ -168,7 +174,7 @@ export function useOperatorAuth(): OperatorAuthModel {
           self.applicationRole !== 'operator' ||
           !self.emailVerified
         ) {
-          setView({ phase: 'denied', message: 'This account has no current operator assignment.' });
+          setView({ phase: 'redirect', to: '/' });
           return;
         }
         const status = await controller.getMfaStatus();
@@ -211,6 +217,14 @@ export function useOperatorAuth(): OperatorAuthModel {
             'unauthenticated',
           ].includes(cause.code)
         ) {
+          if (cause.code === 'operator_access_denied') {
+            setView({ phase: 'redirect', to: '/' });
+            return;
+          }
+          if (cause.code === 'unauthenticated') {
+            setView({ phase: 'redirect', to: '/account/sign-in' });
+            return;
+          }
           setView({ phase: 'denied', message: cause.message });
           return;
         }
@@ -223,24 +237,6 @@ export function useOperatorAuth(): OperatorAuthModel {
     processedToken.current = null;
     setVerificationAttempt((attempt) => attempt + 1);
   }, []);
-
-  const signIn = useCallback(
-    async (email: string, password: string) => {
-      setBusy(true);
-      setError(null);
-      try {
-        if (!controller) {
-          throw new AuthActionError('unavailable', 'Operator authentication is still loading.');
-        }
-        await controller.signIn(email, password);
-      } catch (cause) {
-        setError(safeActionMessage(cause));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [controller],
-  );
 
   const beginEnrollment = useCallback(async () => {
     const originatingToken = controller?.getSnapshot().accessToken;
@@ -293,17 +289,31 @@ export function useOperatorAuth(): OperatorAuthModel {
   );
 
   const signOut = useCallback(async () => {
+    if (!controller) {
+      setView({ phase: 'redirect', to: '/account/sign-in' });
+      return;
+    }
     const originatingToken = controller?.getSnapshot().accessToken;
     revision.current += 1;
     processedToken.current = null;
+    signOutPending.current = true;
+    signOutFailed.current = false;
     setBusy(true);
     setError(null);
-    setView({ phase: 'anonymous' });
+    setView({ phase: 'authorization-check' });
     try {
-      if (controller) await controller.signOut();
+      await controller.signOut();
+      signOutPending.current = false;
+      if (controller?.getSnapshot().phase === 'anonymous') {
+        setView({ phase: 'redirect', to: '/account/sign-in' });
+      } else {
+        retryVerification();
+      }
     } catch (cause) {
+      signOutPending.current = false;
       const currentToken = controller?.getSnapshot().accessToken;
       if (currentToken && currentToken !== originatingToken) return;
+      signOutFailed.current = true;
       setView({
         phase: 'denied',
         message:
@@ -314,20 +324,20 @@ export function useOperatorAuth(): OperatorAuthModel {
     } finally {
       setBusy(false);
     }
-  }, [controller]);
+  }, [controller, retryVerification]);
 
   return {
     view:
-      (view.phase === 'authorized' ||
+      (view.phase === 'redirect' && authPhase === 'authenticated' && viewToken !== accessToken) ||
+      ((view.phase === 'authorized' ||
         view.phase === 'mfa-enrollment' ||
         view.phase === 'mfa-challenge') &&
-      (authPhase !== 'authenticated' || viewToken !== accessToken)
-        ? { phase: authPhase === 'anonymous' ? 'anonymous' : 'authorization-check' }
+        (authPhase !== 'authenticated' || viewToken !== accessToken))
+        ? { phase: 'authorization-check' }
         : view,
     email: auth.user?.email ?? null,
     busy,
     error,
-    signIn,
     beginEnrollment,
     verify,
     retryVerification,

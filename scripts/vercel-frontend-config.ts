@@ -1,8 +1,11 @@
 import { isIP } from 'node:net';
 import { routes, type VercelConfig } from '@vercel/config/v1';
+import { OPERATOR_PATH } from '../packages/contracts/src/navigation.ts';
+import { RETIRED_OPERATOR_BRIDGE } from './lib/retired-operator-entry.ts';
 
 const apiProxySource = '/v1/:path*';
-const spaFallbackSource = '/:path((?!v1(?:/|$)|operator(?:/|$)).*)';
+const operatorPrefix = OPERATOR_PATH.slice(0, -1);
+const spaFallbackSource = `/:path((?!v1(?:/|$)|${operatorPrefix.slice(1)}(?:/|$)|operator(?:/|$)).*)`;
 
 function normalizeApiOrigin(value: string | undefined): string | undefined {
   const candidate = value?.trim();
@@ -61,8 +64,13 @@ export function createVercelFrontendConfig(
       ...apiRewrites,
       ...(options.embeddedOperator
         ? [
-            routes.rewrite('/operator', '/operator/index.html'),
-            routes.rewrite('/operator/:path((?!assets(?:/|$)).*)', '/operator/index.html'),
+            routes.rewrite('/operator', `${RETIRED_OPERATOR_BRIDGE}index.html`),
+            routes.rewrite('/operator/:path*', `${RETIRED_OPERATOR_BRIDGE}index.html`),
+            routes.rewrite(operatorPrefix, `${operatorPrefix}/index.html`),
+            routes.rewrite(
+              `${operatorPrefix}/:path((?!assets(?:/|$)).*)`,
+              `${operatorPrefix}/index.html`,
+            ),
           ]
         : []),
       routes.rewrite(

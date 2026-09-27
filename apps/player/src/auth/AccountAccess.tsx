@@ -18,6 +18,7 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
   const routeState: unknown = location.state;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,9 +32,13 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setBusy(true);
     setNotice(null);
     setError(null);
+    if (registering && password !== confirmation) {
+      setError('The password confirmation does not match.');
+      return;
+    }
+    setBusy(true);
     try {
       if (!controller) {
         throw new AuthActionError('unavailable', auth.error ?? 'Account access is loading.');
@@ -41,6 +46,7 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
       if (registering) {
         await controller.signUp(email, password, `${window.location.origin}/auth/callback`);
         setPassword('');
+        setConfirmation('');
         setNotice('Check your email to verify this account.');
       } else {
         await controller.signIn(email, password);
@@ -49,6 +55,7 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
       }
     } catch (submitError) {
       setPassword('');
+      setConfirmation('');
       setError(safeMessage(submitError));
     } finally {
       setBusy(false);
@@ -98,6 +105,21 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
           disabled={busy}
         />
         <p className={styles.fieldHint}>Use at least 12 characters.</p>
+        {registering ? (
+          <>
+            <label htmlFor="account-confirmation">Confirm password</label>
+            <input
+              id="account-confirmation"
+              name="password-confirmation"
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              disabled={busy}
+            />
+          </>
+        ) : null}
         <div className={styles.formMessage} aria-live="polite" aria-atomic="true">
           {error ? <p className={styles.formError}>{error}</p> : null}
           {notice ? <p className={styles.formSuccess}>{notice}</p> : null}

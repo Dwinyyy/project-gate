@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { OPERATOR_PATH } from '../../packages/contracts/src/navigation';
 
 const operatorUserId = '22222222-2222-4222-8222-222222222222';
 const operatorSessionId = '33333333-3333-4333-8333-333333333333';
@@ -156,7 +158,7 @@ async function restorePlayerSession(
 }
 
 async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
-  await useControlledAuth(page, 5174);
+  await useControlledAuth(page);
   await page.route('**/v1/auth/session', (route) =>
     route.fulfill({
       status: 200,
@@ -184,6 +186,18 @@ async function useOperatorPasswordSession(page: Page, factors: TestFactor[]) {
       contentType: 'application/json',
       body: JSON.stringify(operatorUser(factors)),
     }),
+  );
+  await page.route('**/__auth-state-test', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Auth state fixture</body>',
+    }),
+  );
+  await page.goto('/__auth-state-test');
+  await page.evaluate(
+    ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
+    { storageKey: 'sb-127-auth-token', session: passwordSession('aal1', factors) },
   );
 }
 
@@ -223,9 +237,38 @@ test('assigned main-site sign-in opens same-origin operator MFA without another 
   await page.getByLabel('Email address').fill('operator@example.test');
   await page.getByLabel('Password').fill('long-enough-password');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL('http://127.0.0.1:5173/operator/');
+  await expect(page).toHaveURL(`http://127.0.0.1:5173${OPERATOR_PATH}`);
   await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Operator sign in.' })).toHaveCount(0);
+});
+
+test('operator shell stays hidden until assignment verification finishes', async ({ page }) => {
+  await useOperatorPasswordSession(page, []);
+  let releaseVerification: () => void = () => undefined;
+  const heldVerification = new Promise<void>((resolveHeld) => {
+    releaseVerification = resolveHeld;
+  });
+  await page.route('**/v1/auth/session', async (route) => {
+    await heldVerification;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authUserId: operatorUserId,
+        email: 'operator@example.test',
+        emailVerified: true,
+        sessionId: operatorSessionId,
+        aal: 'aal1',
+        applicationRole: 'operator',
+      }),
+    });
+  });
+  await page.goto(OPERATOR_PATH);
+  await expect(page.getByRole('heading', { name: 'Checking your account…' })).toBeVisible();
+  await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
+  releaseVerification();
+  await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
 });
 
 test('ordinary main-site sign-in stays in the player application', async ({ page }) => {
@@ -405,17 +448,14 @@ test('operator can retry temporary assignment verification failure without signi
       ),
     }),
   );
-  await page.goto('http://127.0.0.1:5174/operator/');
-  await page.getByLabel('Operator email').fill('operator@example.test');
-  await page.getByLabel('Password').fill('long-enough-password');
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.goto(OPERATOR_PATH);
   await expect(
-    page.getByRole('heading', { name: 'Operator authentication unavailable.' }),
+    page.getByRole('heading', { name: 'Operator verification unavailable.' }),
   ).toBeVisible();
   failLookup = false;
   await page.getByRole('button', { name: 'Retry verification' }).click({ timeout: 1_000 });
   await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
-  expect(passwordRequests).toBe(1);
+  expect(passwordRequests).toBe(0);
 });
 
 for (const { recovery, sameUser } of [
@@ -532,13 +572,13 @@ for (const { recovery, sameUser } of [
       }),
     );
     // Seed from an inert same-origin page: a loaded player app would legitimately route the
-    // operator session to /operator/ itself and race this navigation.
+    // operator session to its private entry itself and race this navigation.
     await page.goto('/__auth-concurrency-test');
     await page.evaluate(
       (session) => localStorage.setItem('sb-127-auth-token', JSON.stringify(session)),
       sessionA,
     );
-    await page.goto(recovery ? '/account/recovery' : '/operator/');
+    await page.goto(recovery ? '/account/recovery' : OPERATOR_PATH);
     await page.getByLabel(recovery ? 'Authenticator code' : 'Six-digit code').fill('123456');
     await page.getByRole('button', { name: 'Verify authenticator' }).click();
     await started;
@@ -597,16 +637,18 @@ for (const { recovery, sameUser } of [
       expect(result.writes.every((token) => token === sessionB.access_token)).toBe(true);
     }
     if (recovery) await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0);
-    else
+    else if (sameUser)
       await expect(
-        page.getByRole('heading', {
-          name: sameUser ? 'Enter your authenticator code.' : 'Operator access denied.',
-        }),
+        page.getByRole('heading', { name: 'Enter your authenticator code.' }),
       ).toBeVisible();
+    else {
+      await expect(page).toHaveURL('http://127.0.0.1:5173/');
+      await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
+    }
   });
 }
 
-test('unassigned direct operator visit is denied before authenticator enrollment', async ({
+test('unassigned direct operator visit returns to player before authenticator enrollment', async ({
   page,
 }) => {
   await useOperatorPasswordSession(page, []);
@@ -629,11 +671,9 @@ test('unassigned direct operator visit is denied before authenticator enrollment
     enrollmentRequests += 1;
     return route.fulfill({ status: 500, body: '{}' });
   });
-  await page.goto('http://127.0.0.1:5174/operator/');
-  await page.getByLabel('Operator email').fill('operator@example.test');
-  await page.getByLabel('Password').fill('long-enough-password');
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  await page.goto(OPERATOR_PATH);
+  await expect(page).toHaveURL('http://127.0.0.1:5173/');
+  await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
   expect(enrollmentRequests).toBe(0);
 });
@@ -786,14 +826,56 @@ test('player navigation, real API response and responsive layout', async ({ page
   expect(errors).toEqual([]);
 });
 
-test('operator screen and endpoint remain locked', async ({ page, request }) => {
-  await useControlledAuth(page, 5174);
-  await page.goto('http://127.0.0.1:5174');
-  await expect(page.getByText('Operator access locked')).toBeVisible();
+test('anonymous operator entry returns to main-site sign-in while endpoint stays locked', async ({
+  page,
+  request,
+}) => {
+  await useControlledAuth(page);
+  await page.goto(OPERATOR_PATH);
+  await expect(page).toHaveURL('http://127.0.0.1:5173/account/sign-in');
+  await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
   const response = await request.post('http://127.0.0.1:3001/v1/operator/feature-controls', {
     data: { commerce: true },
   });
   expect(response.status()).toBe(401);
+});
+
+test('legacy operator URLs discard query and fragment credentials', async ({ page }) => {
+  await useControlledAuth(page);
+  const bridgeOutput = resolve('dist/player/_legacy/operator');
+  const bridgeHtml = readFileSync(resolve(bridgeOutput, 'index.html'), 'utf8');
+  const bridgeScript = readFileSync(resolve(bridgeOutput, 'redirect.js'), 'utf8');
+  await page.route('**/operator/callback**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: bridgeHtml }),
+  );
+  await page.route('**/_legacy/operator/redirect.js', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/javascript', body: bridgeScript }),
+  );
+  await page.goto('/operator/callback?access_token=legacy-query#refresh_token=legacy-fragment');
+  await expect(page).toHaveURL('http://127.0.0.1:5173/account/sign-in');
+  await expect(page.getByLabel('Operator email')).toHaveCount(0);
+
+  const retiredOutput = resolve('dist/operator');
+  const retiredHtml = readFileSync(resolve(retiredOutput, 'index.html'), 'utf8');
+  const retiredScript = readFileSync(resolve(retiredOutput, 'redirect.js'), 'utf8');
+  await page.route('http://127.0.0.1:5174/callback**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: retiredHtml }),
+  );
+  await page.route('http://127.0.0.1:5174/redirect.js', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/javascript', body: retiredScript }),
+  );
+  await page.route('https://project-gate-player.vercel.app/account/sign-in', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><body>Sign in</body>',
+    }),
+  );
+  await page.goto(
+    'http://127.0.0.1:5174/callback?access_token=legacy-query#refresh_token=legacy-fragment',
+  );
+  await expect(page).toHaveURL('https://project-gate-player.vercel.app/account/sign-in');
+  await expect(page.getByLabel('Operator email')).toHaveCount(0);
 });
 
 test('failed status request is visibly unavailable', async ({ page }) => {
@@ -808,7 +890,8 @@ test('player account access is responsive and validates secrets locally', async 
   await page.goto('/account/register');
   await expect(page.getByRole('heading', { name: 'Create your account.' })).toBeVisible();
   await page.getByLabel('Email address').fill('player@example.test');
-  await page.getByLabel('Password').fill('short');
+  await page.getByLabel('Password', { exact: true }).fill('short');
+  await page.getByLabel('Confirm password').fill('short');
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByText('Use at least 12 characters for your password.')).toBeVisible();
   expect(page.url()).not.toContain('short');
@@ -845,7 +928,8 @@ test('player account registration reaches the provider and requests verification
   });
   await page.goto('/account/register');
   await page.getByLabel('Email address').fill('player@example.test');
-  await page.getByLabel('Password').fill('long-enough-password');
+  await page.getByLabel('Password', { exact: true }).fill('long-enough-password');
+  await page.getByLabel('Confirm password').fill('long-enough-password');
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByText('Check your email to verify this account.')).toBeVisible();
 });
@@ -1331,17 +1415,14 @@ test('ordinary signed-in sessions cannot use recovery as a password-change short
   await expect(page.getByLabel('New password')).toHaveCount(0);
 });
 
-test('operator MFA starts behind password authentication without registration', async ({
+test('anonymous operator visits use main-site sign-in without exposing an operator form', async ({
   page,
 }) => {
-  await useControlledAuth(page, 5174);
-  await page.goto('http://127.0.0.1:5174');
-  await expect(page.getByRole('heading', { name: 'Operator sign in.' })).toBeVisible();
-  await expect(page.getByRole('link', { name: /create/i })).toHaveCount(0);
-  await page.getByLabel('Operator email').fill('operator@example.test');
-  await page.getByLabel('Password').fill('short');
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByText('Use at least 12 characters for your password.')).toBeVisible();
+  await useControlledAuth(page);
+  await page.goto(OPERATOR_PATH);
+  await expect(page).toHaveURL('http://127.0.0.1:5173/account/sign-in');
+  await expect(page.getByRole('heading', { name: 'Sign in to your account.' })).toBeVisible();
+  await expect(page.getByLabel('Operator email')).toHaveCount(0);
   await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
 });
 
@@ -1349,7 +1430,7 @@ for (const method of ['recovery', 'otp']) {
   test(`operator client rejects ${method} sessions before entering the MFA flow`, async ({
     page,
   }) => {
-    await useControlledAuth(page, 5174);
+    await useControlledAuth(page);
     await page.route('**/auth/v1/user', (route) =>
       route.fulfill({
         status: 200,
@@ -1357,21 +1438,24 @@ for (const method of ['recovery', 'otp']) {
         body: JSON.stringify(operatorUser([])),
       }),
     );
-    await page.goto('http://127.0.0.1:5174');
+    await page.route('**/__auth-state-test', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: '<!doctype html><body>Auth state fixture</body>',
+      }),
+    );
+    await page.goto('/__auth-state-test');
     await page.evaluate(
       ({ storageKey, session }) => localStorage.setItem(storageKey, JSON.stringify(session)),
       { storageKey: 'sb-127-auth-token', session: operatorRecoverySession(method) },
     );
-    await page.reload();
+    await page.goto(OPERATOR_PATH);
 
-    await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
-    await expect(
-      page.getByText(
-        method === 'recovery'
-          ? 'Password recovery sessions cannot access the operator workspace.'
-          : 'Sign in with your password before accessing the operator workspace.',
-      ),
-    ).toBeVisible();
+    await expect(page).toHaveURL(
+      `http://127.0.0.1:5173${method === 'recovery' ? '/account/recovery' : '/account/sign-in'}`,
+    );
+    await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toHaveCount(0);
   });
 }
@@ -1398,10 +1482,7 @@ test('operator MFA enrollment keeps its QR secret inside the enrollment step', a
       }),
     }),
   );
-  await page.goto('http://127.0.0.1:5174');
-  await page.getByLabel('Operator email').fill('operator@example.test');
-  await page.getByLabel('Password').fill('long-enough-password');
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.goto(OPERATOR_PATH);
   await expect(page.getByRole('heading', { name: 'Add an authenticator.' })).toBeVisible();
   await expect(page.getByText('JBSWY3DPEHPK3PXP')).toHaveCount(0);
   await page.getByRole('button', { name: 'Set up authenticator' }).click();
@@ -1413,7 +1494,7 @@ test('operator MFA enrollment keeps its QR secret inside the enrollment step', a
   await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
 });
 
-test('operator MFA keeps an unprovisioned AAL2 identity denied', async ({ page }) => {
+test('operator MFA returns an unprovisioned AAL2 identity to the player app', async ({ page }) => {
   const factors: TestFactor[] = [
     {
       id: operatorFactorId,
@@ -1446,16 +1527,14 @@ test('operator MFA keeps an unprovisioned AAL2 identity denied', async ({ page }
       body: JSON.stringify({ error: { code: 'OPERATOR_ACCESS_DENIED' } }),
     }),
   );
-  await page.goto('http://127.0.0.1:5174');
-  await page.getByLabel('Operator email').fill('operator@example.test');
-  await page.getByLabel('Password').fill('long-enough-password');
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.goto(OPERATOR_PATH);
   await expect(page.getByRole('heading', { name: 'Enter your authenticator code.' })).toBeVisible();
   await expect(page.getByRole('img', { name: /QR/i })).toHaveCount(0);
   await expect(page.getByText('JBSWY3DPEHPK3PXP')).toHaveCount(0);
   await page.getByLabel('Six-digit code').fill('123456');
   await page.getByRole('button', { name: 'Verify authenticator' }).click();
-  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  await expect(page).toHaveURL('http://127.0.0.1:5173/');
+  await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
   await expect(page.getByText('Operator session authorized.')).toHaveCount(0);
 });
 
@@ -1498,10 +1577,7 @@ test('operator MFA admits only an active AAL2 operator to the restricted shell',
       }),
     }),
   );
-  await page.goto('http://127.0.0.1:5174');
-  await page.getByLabel('Operator email').fill('operator@example.test');
-  await page.getByLabel('Password').fill('long-enough-password');
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await page.goto(OPERATOR_PATH);
   await page.getByLabel('Six-digit code').fill('123456');
   await page.getByRole('button', { name: 'Verify authenticator' }).click();
   await expect(page.getByRole('heading', { name: 'Operator session authorized.' })).toBeVisible();
@@ -1511,4 +1587,43 @@ test('operator MFA admits only an active AAL2 operator to the restricted shell',
   ).toBeVisible();
   await expect(page.getByRole('img', { name: /QR/i })).toHaveCount(0);
   await expect(page.getByText('JBSWY3DPEHPK3PXP')).toHaveCount(0);
+});
+
+test('operator partial sign-out reports provider failure after local credentials clear', async ({
+  page,
+}) => {
+  const factors: TestFactor[] = [
+    {
+      id: operatorFactorId,
+      status: 'verified',
+      factor_type: 'totp',
+      friendly_name: 'Hunter World Operator',
+      created_at: '2026-09-13T12:00:00.000Z',
+      updated_at: '2026-09-13T12:00:00.000Z',
+    },
+  ];
+  await useOperatorPasswordSession(page, factors);
+  await page.route('**/auth/v1/logout**', (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: '{"msg":"Provider unavailable"}',
+    }),
+  );
+  await page.goto(OPERATOR_PATH);
+  await expect(page.getByRole('heading', { name: 'Enter your authenticator code.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Operator access denied.' })).toBeVisible();
+  await expect(
+    page.getByText(
+      'This browser session was cleared, but provider sign-out could not be confirmed. Sign in again and retry if needed.',
+    ),
+  ).toBeVisible();
+  await expect(page).toHaveURL(`http://127.0.0.1:5173${OPERATOR_PATH}`);
+  await expect(page.getByText('OPERATOR WORKSPACE')).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('sb-127-auth-token')))
+    .toBeNull();
+  await page.getByRole('button', { name: 'Return to sign in' }).click();
+  await expect(page).toHaveURL('http://127.0.0.1:5173/account/sign-in');
 });

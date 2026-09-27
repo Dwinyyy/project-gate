@@ -2,7 +2,7 @@
 
 This runbook implements the owner's requested flow: normal registration → owner assignment → main-site password sign-in → required authenticator enrollment/challenge → operator console. Assignment alone grants no authenticated operator session or administrative permissions. See [ADR 0010](../adr/0010-operator-assignment-and-routing.md).
 
-**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. Both frontend aliases and the Render API proxy were verified on commit `5c1bc5c8b1d159a5c7ae494bba78a39ad151ee5f` on 2026-09-24. The owner reported **Main-site operator round trip passed** on that deployment. Mailbox recovery acceptance remains separately required for Task 2.1.
+**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. Both frontend aliases and the Render API proxy were verified on commit `5c1bc5c8b1d159a5c7ae494bba78a39ad151ee5f` on 2026-09-24. The owner reported **Main-site operator round trip passed** on that deployment. The owner also reported **Enrolled recovery passed** on 2026-09-24. The owner subsequently reported **Unenrolled recovery passed**. Approved mobile/private-entry and password-confirmation changes are in progress; the instructions below describe the currently deployed checkpoint.
 
 ## Assign an account by email
 
@@ -50,6 +50,8 @@ Ordinary sign-out revokes the session that started it. Password replacement requ
 
 ## Remove operator access
 
+Removing a person's operator access is separate from retiring the old hosting project. To remove the old website itself, use the following section after its deployment prerequisite passes.
+
 1. Open the same **project-gate → SQL Editor → New query**.
 2. Run the assignment query with the exact target email, `p_status => 'suspended'`, your name and a removal reason.
 3. Confirm the receipt says `new_status: suspended`.
@@ -78,3 +80,22 @@ pnpm exec tsx scripts/provision-operator.ts .cache/operator-status-request.json
 This prepares safely escaped SQL without changing access. Execute the reviewed statement through the authorized owner transport against the confirmed development project. Both management functions are SECURITY INVOKER with pinned search paths and owner checks. `hunter_runtime`, `anon`, `authenticated` and `service_role` cannot execute them or write audit receipts. Assignment never adds permission rows; review existing permissions before intentionally reactivating an old operator.
 
 Record nonsecret build revisions, receipt IDs and outcomes. The actual owner-entered main-site journey and enrolled-account email recovery remain required acceptance evidence; automated tests and publicly rendered shells do not replace them.
+
+## Delete the retired standalone website
+
+Owner request, 2026-09-25: after the main-site operator panel works independently, remove `https://project-gate-operator.vercel.app/` as an accessible website. The owner will perform the deletion. No hosting project has been deleted by this task.
+
+**Prerequisite:** the revised player deployment must be verified first, including its embedded operator assets, same-site entry, authentication boundary and registration confirmation. Preparation and local tests alone do not satisfy this prerequisite. The main site must make no production request to the standalone operator host. The operator source directory remains part of the repository because the main-site build compiles it directly.
+
+After Codex reports this prerequisite verified, remove any retired Auth redirect origin, then delete the old Vercel project:
+
+1. Open [project-gate → Supabase Auth URL Configuration](https://supabase.com/dashboard/project/zsejplglpfcmcikcydgb/auth/url-configuration). Confirm **Site URL** points to the main site, not the old operator site. If the **Redirect URLs** list includes `https://project-gate-operator.vercel.app/auth/callback` or any other URL on that old host, remove only those old-host entries and save if the dashboard asks. Keep the main-site `/auth/callback` and `/account/recovery` URLs.
+2. Open the [Vercel dashboard](https://vercel.com/dashboard) and select the team containing the Project Gate projects.
+3. Open **project-gate-operator**.
+4. Click **Settings**, then **General**. Confirm the project is `project-gate-operator`, ID `prj_vLLpAR6loaOPhG5fD2AWvGGn6w3m`.
+5. Scroll to **Delete Project** and click **Delete**.
+6. In the dialog, enter `project-gate-operator` and the additional confirmation text the dialog requests, then click **Continue**.
+7. Open the old operator URL in a new tab: it should no longer serve the application. Open [main-site sign-in](https://project-gate-player.vercel.app/account/sign-in) and confirm assigned operators still reach their panel after password/authenticator verification.
+8. Report **Old operator project removed**, or the failed step and nonsecret error, so the external state can be checked and recorded.
+
+Vercel project deletion removes that project's deployments, domains, environment variables and settings. The selected target is only the standalone frontend project; retain `project-gate-player`, the shared Git repository, Supabase and Render. The main-site bundle contains the operator interface and does not fetch it from the deleted host. Follow [Vercel's current project-deletion instructions](https://vercel.com/docs/projects/managing-projects#deleting-a-project) and [Supabase's redirect-URL guidance](https://supabase.com/docs/guides/auth/redirect-urls), checked on 2026-09-27. This handoff does not authorize deletion of another service.

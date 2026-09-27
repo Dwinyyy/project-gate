@@ -33,6 +33,8 @@ export const systemStatusSchema = {
 
 export type SystemStatus = FromSchema<typeof systemStatusSchema>;
 
+export { OPERATOR_PATH } from './navigation.js';
+
 export const errorResponseSchema = {
   type: 'object',
   additionalProperties: false,

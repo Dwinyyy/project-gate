@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Icon, StatusBadge } from '@hunter-world/ui';
-import { useOperatorAuth, type OperatorAuthModel } from './useOperatorAuth';
+import { type OperatorAuthModel } from './useOperatorAuth';
 import styles from '../App.module.css';
 
 function SignOutButton({ auth }: { auth: OperatorAuthModel }) {
@@ -13,54 +13,6 @@ function SignOutButton({ auth }: { auth: OperatorAuthModel }) {
     >
       Sign out
     </button>
-  );
-}
-
-function SignIn({ auth }: { auth: OperatorAuthModel }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await auth.signIn(email, password);
-    setPassword('');
-  }
-
-  return (
-    <>
-      <StatusBadge tone="warning">Operator access locked</StatusBadge>
-      <h1 id="access-title">Operator sign in.</h1>
-      <p className={styles.description}>
-        Sign in with the account assigned by the project owner. Registration is available on the
-        main site.
-      </p>
-      <form className={styles.authForm} onSubmit={submit} noValidate>
-        <label htmlFor="operator-email">Operator email</label>
-        <input
-          id="operator-email"
-          type="email"
-          autoComplete="username"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          disabled={auth.busy}
-        />
-        <label htmlFor="operator-password">Password</label>
-        <input
-          id="operator-password"
-          type="password"
-          autoComplete="current-password"
-          minLength={12}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          disabled={auth.busy}
-        />
-        <AuthError message={auth.error} />
-        <button className={styles.primaryButton} type="submit" disabled={auth.busy}>
-          {auth.busy ? 'Checking…' : 'Continue'}
-          <Icon name="arrow" width="16" height="16" />
-        </button>
-      </form>
-    </>
   );
 }
 
@@ -222,8 +174,7 @@ function Authorized({ auth }: { auth: OperatorAuthModel }) {
   );
 }
 
-export function OperatorAuth() {
-  const auth = useOperatorAuth();
+export function OperatorAuth({ auth }: { auth: OperatorAuthModel }) {
   const showsMfa = auth.view.phase === 'mfa-enrollment' || auth.view.phase === 'mfa-challenge';
   return (
     <section className={styles.lockPanel} aria-labelledby="access-title">
@@ -231,9 +182,7 @@ export function OperatorAuth() {
         <div />
         <Icon name="shield" width="40" height="40" />
       </div>
-      {auth.view.phase === 'anonymous' ? (
-        <SignIn auth={auth} />
-      ) : showsMfa ? (
+      {showsMfa ? (
         <MfaStep auth={auth} />
       ) : auth.view.phase === 'authorized' ? (
         <Authorized auth={auth} />

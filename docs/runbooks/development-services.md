@@ -20,7 +20,8 @@ The original local development redirect entries are exact:
 
 - Player registration verification: `http://127.0.0.1:5173/auth/callback`
 - Player password recovery: `http://127.0.0.1:5173/account/recovery`
-- Reserved operator callback for a provisioned identity: `http://127.0.0.1:5174/auth/callback`
+
+The separate operator callback was retired when the approved same-site operator entry began reusing the main-site session. The local operator source still runs on port 5174 during development; it does not need a distinct Auth redirect URL.
 
 Do not add wildcard or production redirect origins to development configuration. The player account flow requires email confirmation and passwords of at least 12 characters. Refresh-token rotation is enabled with a 10-second reuse interval. Operator access uses TOTP only: phone MFA is disabled, and a password-authenticated `aal1` session still cannot open the operator workspace. An active `ops.operator_accounts` record and current scoped permissions are a separate server-side gate.
 

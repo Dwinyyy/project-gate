@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
+import { OPERATOR_PATH } from '../../packages/contracts/src/navigation.ts';
 
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
@@ -12,7 +13,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/v1': 'http://127.0.0.1:3001',
-      '/operator': 'http://127.0.0.1:5174',
+      [OPERATOR_PATH.slice(0, -1)]: 'http://127.0.0.1:5174',
     },
   },
 });

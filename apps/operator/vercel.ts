@@ -1,3 +1,8 @@
-import { createVercelFrontendConfig } from '../../scripts/vercel-frontend-config.ts';
+import { routes, type VercelConfig } from '@vercel/config/v1';
 
-export const config = createVercelFrontendConfig(process.env.HUNTER_API_ORIGIN);
+export const config: VercelConfig = {
+  framework: 'vite',
+  buildCommand: 'pnpm run build',
+  outputDirectory: 'dist',
+  rewrites: [routes.rewrite('/:path*', '/index.html')],
+};

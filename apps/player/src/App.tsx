@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getSystemStatus } from '@hunter-world/client';
+import { OPERATOR_PATH } from '@hunter-world/contracts';
 import { Icon, StatusBadge, SystemMark, type IconName } from '@hunter-world/ui';
 import styles from './App.module.css';
 import { AccountAccess } from './auth/AccountAccess';
@@ -344,7 +345,7 @@ export function App() {
       validation === 'valid' &&
       session?.applicationRole === 'operator'
     ) {
-      window.location.replace('/operator/');
+      window.location.replace(OPERATOR_PATH);
     }
   }, [auth.phase, validation, session?.applicationRole]);
 
@@ -357,28 +358,61 @@ export function App() {
     validation === 'valid' &&
     session?.applicationRole === 'operator'
   ) {
-    return <p role="status">Opening the operator workspace…</p>;
+    return (
+      <main className={styles.previewStage}>
+        <section
+          className={`${styles.accountPanel} ${styles.accountTransition}`}
+          role="status"
+          aria-busy="true"
+        >
+          <div className={styles.accountIcon} aria-hidden="true">
+            <SystemMark />
+          </div>
+          <p className={styles.eyebrow}>ACCOUNT SECURITY</p>
+          <h1>Opening operator workspace…</h1>
+          <p className={styles.accountLead}>Preparing your restricted workspace.</p>
+        </section>
+      </main>
+    );
   }
 
   if (auth.phase === 'authenticated' && validation !== 'valid') {
     return (
       <main className={styles.previewStage}>
-        <section className={styles.accountPanel} aria-live="polite">
+        <section
+          className={`${styles.accountPanel} ${styles.accountTransition}`}
+          aria-live="polite"
+          aria-busy={validation === 'checking'}
+        >
+          <div className={styles.accountIcon} aria-hidden="true">
+            <SystemMark />
+          </div>
+          <p className={styles.eyebrow}>ACCOUNT SECURITY</p>
           <h1>
             {validation === 'checking'
               ? 'Checking your account…'
               : 'Account verification unavailable.'}
           </h1>
+          <p className={styles.accountLead}>
+            {validation === 'checking'
+              ? 'Confirming this session before opening the System.'
+              : 'The System could not confirm this account session.'}
+          </p>
           {validation === 'invalid' ? (
             <>
-              <p>{validationError ?? 'The account session could not be verified.'}</p>
-              <button
-                className={styles.accountPrimaryButton}
-                type="button"
-                onClick={() => window.location.reload()}
-              >
-                Retry verification
-              </button>
+              <p className={styles.transitionError}>
+                {validationError ?? 'The account session could not be verified.'}
+              </p>
+              <div className={styles.transitionActions}>
+                <button
+                  className={styles.accountPrimaryButton}
+                  type="button"
+                  onClick={() => window.location.reload()}
+                >
+                  Retry verification
+                </button>
+                <AccountControl />
+              </div>
             </>
           ) : null}
         </section>
@@ -415,6 +449,7 @@ export function App() {
             <Route path="/account/register" element={<AccountAccess mode="register" />} />
             <Route path="/account/recovery" element={<Recovery />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
+            <Route path="/operator/*" element={<Navigate to="/account/sign-in" replace />} />
             <Route path="*" element={<NotFoundScreen />} />
           </Routes>
           <footer className={styles.footer}>
