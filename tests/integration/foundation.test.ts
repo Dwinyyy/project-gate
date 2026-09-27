@@ -1028,6 +1028,42 @@ test('character creation links a verified UUID once and replays the same receipt
   }
 });
 
+test('alias bounds count Unicode characters as PostgreSQL does', async () => {
+  const acceptedId = await characterCandidate();
+  const rejectedId = await characterCandidate();
+  const fortyCharacters = '😀'.repeat(40);
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const encoding = (await owner.query<{ server_encoding: string }>('SHOW server_encoding'))
+      .rows[0]!.server_encoding;
+    if (encoding === 'UTF8') {
+      expect(await characterStore.create(acceptedId, fortyCharacters, randomUUID())).toMatchObject({
+        kind: 'created',
+      });
+      expect(await characterStore.getMe(acceptedId)).toMatchObject({
+        character: { displayAlias: fortyCharacters },
+      });
+    } else {
+      // Windows embedded PostgreSQL uses WIN1252: reaching its encoding error
+      // proves the service did not reject a 40-codepoint alias as too long.
+      await expect(
+        characterStore.create(acceptedId, fortyCharacters, randomUUID()),
+      ).rejects.toMatchObject({ code: '22P05' });
+    }
+    expect(await characterStore.create(rejectedId, `${fortyCharacters}😀`, randomUUID())).toEqual({
+      kind: 'operation_conflict',
+    });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [rejectedId]))
+        .rowCount,
+    ).toBe(0);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(acceptedId);
+    await removeCharacterCandidate(rejectedId);
+  }
+});
+
 test('active and suspended operators cannot read or create player identity', async () => {
   const id = await characterCandidate();
   try {
@@ -1061,15 +1097,12 @@ test('same-key and different-key concurrent creates preserve one living slot', a
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     const sameKey = randomUUID();
-    const same = await Promise.all([
-      characterStore.create(id, 'Civilian', sameKey),
-      characterStore.create(id, 'Civilian', sameKey),
-    ]);
+    const same = await raceBlockedCharacterCreates(id, 'Civilian', [sameKey, sameKey]);
     expect(same.map((result) => result.kind)).toEqual(['created', 'created']);
     expect(same.filter((result) => result.kind === 'created' && result.replayed)).toHaveLength(1);
-    const different = await Promise.all([
-      characterStore.create(otherId, 'Other', randomUUID()),
-      characterStore.create(otherId, 'Other', randomUUID()),
+    const different = await raceBlockedCharacterCreates(otherId, 'Other', [
+      randomUUID(),
+      randomUUID(),
     ]);
     expect(different.filter((result) => result.kind === 'created')).toHaveLength(1);
     expect(different.filter((result) => result.kind === 'occupied')).toHaveLength(1);
@@ -1095,6 +1128,54 @@ test('same-key and different-key concurrent creates preserve one living slot', a
     await removeCharacterCandidate(otherId);
   }
 });
+
+async function raceBlockedCharacterCreates(
+  authUserId: string,
+  alias: string,
+  operationIds: [string, string],
+) {
+  const blocker = await owner.connect();
+  let requests:
+    [ReturnType<typeof characterStore.create>, ReturnType<typeof characterStore.create>] | null =
+    null;
+  try {
+    await blocker.query('BEGIN');
+    await blocker.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended('operator-account:' || $1::uuid::text, 0))",
+      [authUserId],
+    );
+    requests = [
+      characterStore.create(authUserId, alias, operationIds[0]),
+      characterStore.create(authUserId, alias, operationIds[1]),
+    ];
+    const backendPids = await waitForBlockedRuntimeCreates();
+    expect(new Set(backendPids).size).toBe(2);
+    await blocker.query('COMMIT');
+    return await Promise.all(requests);
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    if (requests) await Promise.allSettled(requests);
+  }
+}
+
+async function waitForBlockedRuntimeCreates(): Promise<number[]> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const blocked = await owner.query<{ pid: number }>(
+      `SELECT DISTINCT activity.pid
+         FROM pg_stat_activity activity
+         JOIN pg_locks locks ON locks.pid = activity.pid
+        WHERE activity.usename = 'hunter_runtime'
+          AND activity.wait_event_type = 'Lock'
+          AND locks.locktype = 'advisory' AND NOT locks.granted
+          AND position('operator-account:' IN activity.query) > 0`,
+    );
+    if (blocked.rows.length === 2) return blocked.rows.map((row) => row.pid);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('Two runtime backends did not contend for the character creation lock');
+}
 
 test('unverified, banned, and missing Auth identities cannot gain or replay a receipt', async () => {
   const id = randomUUID();

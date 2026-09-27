@@ -145,7 +145,8 @@ export function createCharacterStore(pool: Pool): CharacterStore {
     async create(authUserId, displayAlias, operationId) {
       if (!isUuid(authUserId)) return { kind: 'auth_ineligible' };
       if (!isUuid(operationId)) return { kind: 'operation_conflict' };
-      if (displayAlias.length < 1 || displayAlias.length > 40 || !/\S/u.test(displayAlias)) {
+      const aliasLength = Array.from(displayAlias).length;
+      if (aliasLength < 1 || aliasLength > 40 || !/\S/u.test(displayAlias)) {
         return { kind: 'operation_conflict' };
       }
       const fingerprint = createHash('sha256').update(displayAlias, 'utf8').digest();
