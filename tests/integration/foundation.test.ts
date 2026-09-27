@@ -260,7 +260,7 @@ test('awakening, presence and visibility changes cannot free the living slot', a
   }
 });
 
-test('public roles cannot read game identity and runtime remains read only', async () => {
+test('public roles cannot read game identity and runtime cannot change protected state', async () => {
   const accountId = (
     await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
   ).rows[0]!.id;
@@ -271,7 +271,7 @@ test('public roles cannot read game identity and runtime remains read only', asy
     )
   ).rows[0]!.id;
   try {
-    for (const role of ['anon', 'authenticated']) {
+    for (const role of ['anon', 'authenticated', 'service_role']) {
       const privileges = await owner.query(
         "SELECT has_schema_privilege($1, 'game', 'USAGE') AS schema, has_table_privilege($1, 'game.accounts', 'SELECT') AS accounts_read, has_table_privilege($1, 'game.characters', 'SELECT') AS characters_read, has_table_privilege($1, 'game.accounts', 'INSERT,UPDATE,DELETE') AS accounts_write, has_table_privilege($1, 'game.characters', 'INSERT,UPDATE,DELETE') AS characters_write",
         [role],
@@ -310,17 +310,18 @@ test('public roles cannot read game identity and runtime remains read only', asy
         .rows,
     ).toEqual([{ id: characterId }]);
     const forbiddenWrites: [string, string[]][] = [
-      ['INSERT INTO game.accounts DEFAULT VALUES', []],
+      ['INSERT INTO game.accounts(character_creation_not_before) VALUES (now())', []],
       [
-        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Forbidden')",
+        "INSERT INTO game.characters(account_id, display_alias, life_state) VALUES ($1, 'Forbidden', 'dead')",
         [accountId],
       ],
-      ['UPDATE game.accounts SET revision = revision + 1 WHERE id = $1', [accountId]],
+      ['UPDATE game.accounts SET auth_user_id = $1 WHERE id = $2', [randomUUID(), accountId]],
       ['UPDATE game.accounts SET character_creation_not_before = now() WHERE id = $1', [accountId]],
       ['UPDATE game.characters SET account_id = $1 WHERE id = $2', [randomUUID(), characterId]],
       ["UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [characterId]],
       ["UPDATE game.characters SET awakening_state = 'awakened' WHERE id = $1", [characterId]],
       ["UPDATE game.characters SET profile_visibility = 'public' WHERE id = $1", [characterId]],
+      ['UPDATE ops.feature_controls SET characters = true WHERE singleton = true', []],
       ['DELETE FROM game.characters WHERE id = $1', [characterId]],
       ['DELETE FROM game.accounts WHERE id = $1', [accountId]],
     ];
@@ -337,6 +338,224 @@ test('public roles cannot read game identity and runtime remains read only', asy
   } finally {
     await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
     await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('creation receipt is private, constrained, and keeps account and character history', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  const characterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Receipt civilian') RETURNING id",
+      [accountId],
+    )
+  ).rows[0]!.id;
+  const operationId = randomUUID();
+  const fingerprint = randomBytes(32);
+  try {
+    await database.pool.query(
+      'INSERT INTO game.character_creation_receipts(account_id, operation_id, request_fingerprint, character_id) VALUES ($1, $2, $3, $4)',
+      [accountId, operationId, fingerprint, characterId],
+    );
+    const receipt = await database.pool.query(
+      'SELECT account_id, operation_id, request_fingerprint, character_id, created_at FROM game.character_creation_receipts WHERE account_id = $1 AND operation_id = $2',
+      [accountId, operationId],
+    );
+    expect(receipt.rows[0]).toMatchObject({
+      account_id: accountId,
+      operation_id: operationId,
+      request_fingerprint: fingerprint,
+      character_id: characterId,
+    });
+    expect(receipt.rows[0]?.created_at).toBeInstanceOf(Date);
+    await expect(
+      owner.query(
+        'INSERT INTO game.character_creation_receipts(account_id, operation_id, request_fingerprint, character_id) VALUES ($1, $2, $3, $4)',
+        [accountId, randomUUID(), randomBytes(31), randomUUID()],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+    await expect(
+      owner.query(
+        'INSERT INTO game.character_creation_receipts(account_id, operation_id, request_fingerprint, character_id) VALUES ($1, $2, $3, $4)',
+        [accountId, randomUUID(), fingerprint, characterId],
+      ),
+    ).rejects.toMatchObject({ code: '23505' });
+    await expect(
+      owner.query('DELETE FROM game.characters WHERE id = $1', [characterId]),
+    ).rejects.toMatchObject({ code: '23001' });
+    await expect(
+      owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]),
+    ).rejects.toMatchObject({ code: '23001' });
+  } finally {
+    await owner.query('DELETE FROM game.character_creation_receipts WHERE account_id = $1', [
+      accountId,
+    ]);
+    await owner.query('DELETE FROM game.characters WHERE id = $1', [characterId]);
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('private Auth routine locks and accepts only currently eligible verified users', async () => {
+  const ids = await Promise.all(Array.from({ length: 6 }, () => verifiedOperatorCandidate(false)));
+  const [verifiedId, bannedId, deletedId, anonymousId, unverifiedId, expiredBanId] = ids as [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  await owner.query(
+    "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
+    [bannedId],
+  );
+  await owner.query('UPDATE auth.users SET deleted_at = clock_timestamp() WHERE id = $1', [
+    deletedId,
+  ]);
+  await owner.query('UPDATE auth.users SET is_anonymous = true WHERE id = $1', [anonymousId]);
+  await owner.query('UPDATE auth.users SET email_confirmed_at = NULL WHERE id = $1', [
+    unverifiedId,
+  ]);
+  await owner.query(
+    "UPDATE auth.users SET banned_until = clock_timestamp() - interval '1 day' WHERE id = $1",
+    [expiredBanId],
+  );
+  for (const [id, expected] of [
+    [verifiedId, true],
+    [bannedId, false],
+    [deletedId, false],
+    [anonymousId, false],
+    [unverifiedId, false],
+    [expiredBanId, true],
+    [randomUUID(), false],
+  ] as const) {
+    expect(
+      (await database.pool.query('SELECT game.lock_eligible_auth_user($1) AS eligible', [id]))
+        .rows[0]?.eligible,
+    ).toBe(expected);
+  }
+  const functionInfo = await owner.query(
+    "SELECT p.prosecdef, p.proconfig, p.proowner = (SELECT relowner FROM pg_class WHERE oid = 'auth.users'::regclass) AS trusted_owner FROM pg_proc p WHERE p.oid = 'game.lock_eligible_auth_user(uuid)'::regprocedure",
+  );
+  expect(functionInfo.rows).toEqual([
+    { prosecdef: true, proconfig: ['search_path=pg_catalog, auth'], trusted_owner: true },
+  ]);
+  expect(
+    (
+      await owner.query(
+        "SELECT has_table_privilege('hunter_runtime', 'auth.users', 'SELECT') AS allowed",
+      )
+    ).rows[0]?.allowed,
+  ).toBe(false);
+});
+
+test('private Auth eligibility holds its provider row lock until the transaction ends', async () => {
+  const id = await verifiedOperatorCandidate(false);
+  const runtime = await database.pool.connect();
+  const provider = await owner.connect();
+  try {
+    await runtime.query('BEGIN');
+    expect(
+      (await runtime.query('SELECT game.lock_eligible_auth_user($1) AS eligible', [id])).rows[0]
+        ?.eligible,
+    ).toBe(true);
+    await provider.query('BEGIN');
+    await provider.query("SET LOCAL lock_timeout = '100ms'");
+    await expect(
+      provider.query('UPDATE auth.users SET deleted_at = clock_timestamp() WHERE id = $1', [id]),
+    ).rejects.toMatchObject({ code: '55P03' });
+  } finally {
+    await provider.query('ROLLBACK');
+    await runtime.query('ROLLBACK');
+    provider.release();
+    runtime.release();
+  }
+});
+
+test('creation runtime has only the required column grants and can acquire both locks', async () => {
+  const columns = [
+    ['game.accounts', 'auth_user_id', 'INSERT', true],
+    ['game.accounts', 'character_creation_not_before', 'INSERT', false],
+    ['game.accounts', 'auth_user_id', 'UPDATE', false],
+    ['game.accounts', 'revision', 'UPDATE', true],
+    ['game.characters', 'account_id', 'INSERT', true],
+    ['game.characters', 'display_alias', 'INSERT', true],
+    ['game.characters', 'life_state', 'INSERT', false],
+    ['game.characters', 'life_state', 'UPDATE', false],
+    ['game.character_creation_receipts', 'account_id', 'INSERT', true],
+    ['game.character_creation_receipts', 'operation_id', 'INSERT', true],
+    ['game.character_creation_receipts', 'request_fingerprint', 'INSERT', true],
+    ['game.character_creation_receipts', 'character_id', 'INSERT', true],
+    ['game.character_creation_receipts', 'created_at', 'INSERT', false],
+    ['ops.feature_controls', 'singleton', 'UPDATE', true],
+    ['ops.feature_controls', 'characters', 'UPDATE', false],
+  ] as const;
+  for (const [relation, column, privilege, expected] of columns) {
+    expect(
+      (
+        await owner.query('SELECT has_column_privilege($1, $2, $3, $4) AS allowed', [
+          'hunter_runtime',
+          relation,
+          column,
+          privilege,
+        ])
+      ).rows[0]?.allowed,
+      `${relation}.${column} ${privilege}`,
+    ).toBe(expected);
+  }
+  const accountId = (
+    await database.pool.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES (NULL) RETURNING id',
+    )
+  ).rows[0]!.id;
+  try {
+    const client = await database.pool.connect();
+    try {
+      await client.query('BEGIN');
+      expect(
+        (await client.query('SELECT id FROM game.accounts WHERE id = $1 FOR UPDATE', [accountId]))
+          .rows,
+      ).toEqual([{ id: accountId }]);
+      expect(
+        (await client.query('SELECT singleton, characters FROM ops.feature_controls FOR SHARE'))
+          .rows,
+      ).toEqual([{ singleton: true, characters: false }]);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+  } finally {
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+  for (const role of ['anon', 'authenticated', 'service_role']) {
+    expect(
+      (
+        await owner.query(
+          "SELECT has_function_privilege($1, 'game.lock_eligible_auth_user(uuid)', 'EXECUTE') AS allowed",
+          [role],
+        )
+      ).rows[0]?.allowed,
+    ).toBe(false);
+    expect(
+      (
+        await owner.query(
+          "SELECT has_table_privilege($1, 'game.character_creation_receipts', 'SELECT') AS allowed",
+          [role],
+        )
+      ).rows[0]?.allowed,
+    ).toBe(false);
+    const client = await owner.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SET LOCAL ROLE ${role}`);
+      await expect(
+        client.query('SELECT game.lock_eligible_auth_user($1)', [randomUUID()]),
+      ).rejects.toMatchObject({ code: '42501' });
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
   }
 });
 
