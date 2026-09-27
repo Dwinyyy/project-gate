@@ -316,7 +316,11 @@ test('public roles cannot read game identity and runtime remains read only', asy
         [accountId],
       ],
       ['UPDATE game.accounts SET revision = revision + 1 WHERE id = $1', [accountId]],
+      ['UPDATE game.accounts SET character_creation_not_before = now() WHERE id = $1', [accountId]],
       ['UPDATE game.characters SET account_id = $1 WHERE id = $2', [randomUUID(), characterId]],
+      ["UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [characterId]],
+      ["UPDATE game.characters SET awakening_state = 'awakened' WHERE id = $1", [characterId]],
+      ["UPDATE game.characters SET profile_visibility = 'public' WHERE id = $1", [characterId]],
       ['DELETE FROM game.characters WHERE id = $1', [characterId]],
       ['DELETE FROM game.accounts WHERE id = $1', [accountId]],
     ];
