@@ -1,6 +1,6 @@
 # Task 2.2 readiness audit — 2026-09-27
 
-This is a read-only preparation record, not a schema design, migration, implementation, or claim that Task 2.2 has started. The [roadmap](../plans/project-roadmap-and-goal.md) keeps Task 2.2 behind the owner removal of the retired operator Vercel project. As checked on 2026-09-27, that project still exists and its URL returns HTTP 200 with a neutral handoff. The revised main-site password/TOTP round trip has passed.
+This is a read-only preparation record, not a schema design, migration or implementation. The [roadmap](../plans/project-roadmap-and-goal.md) kept Task 2.2 behind the owner removal of the retired operator Vercel project. That prerequisite was met on 2026-09-27: the owner confirmed removal, Vercel no longer lists the project, its URL returns 404, and the main site remains available. The revised main-site password/TOTP round trip and both recovery journeys passed. Task 2.2 design may now begin.
 
 ## Sources and current state
 

@@ -1,6 +1,6 @@
 # Vercel frontend preview and operator entry
 
-The [main development site](https://project-gate-player.vercel.app) embeds the player and operator source applications in one deployment. The old standalone operator Vercel project is being retired at the owner's request. Its [deletion handoff](operator-access.md#delete-the-retired-standalone-website) follows verification of the revised main site. The browser preview remains an account-enabled foundation, not a playable game or public release.
+The [main development site](https://project-gate-player.vercel.app) embeds the player and operator source applications in one deployment. The old standalone operator Vercel project was removed on 2026-09-27; its URL returns 404. The browser preview remains an account-enabled foundation, not a playable game or public release.
 
 ## Repository contract
 
@@ -11,13 +11,13 @@ The checked-in `vercel.ts` files provide:
 - app-local `dist` output;
 - main-site routes for account callbacks, recovery and the embedded operator entry;
 - a same-origin `/v1` reverse proxy on the main site controlled by `HUNTER_API_ORIGIN`;
-- a neutral redirect page on the retired standalone host. It sends visitors to fixed main-site sign-in without reading the old URL's query or fragment.
+- a neutral redirect artifact retained only for an accidental standalone build; no standalone operator hosting project remains. The main site's legacy `/operator/` path also forwards to fixed main-site sign-in without reading query or fragment data.
 
 With no `HUNTER_API_ORIGIN`, `/v1` is excluded from the SPA fallback. The static shell still builds, while status and Auth requests receive a real not-found response and the UI remains unavailable. Never use a localhost URL, a documentation placeholder, or a URL containing `/v1`; supply only the persistent API origin, such as the HTTPS origin issued by its eventual host.
 
 ## Project settings
 
-The maintained hosting project is `project-gate-player`; it builds both source applications. The old `project-gate-operator` hosting project can be deleted after the main-site deployment is verified.
+The maintained hosting project is `project-gate-player`; it builds both source applications. The old `project-gate-operator` hosting project has been deleted.
 
 | Setting              | Main-site project                                    |
 | -------------------- | ---------------------------------------------------- |
@@ -54,8 +54,8 @@ https://project-gate-player.vercel.app/auth/callback
 https://project-gate-player.vercel.app/account/recovery
 ```
 
-Do not replace them with `https://*.vercel.app/**`. The former standalone operator callback is retired; remove any old-host Auth redirect entries before deleting that hosting project. Database membership and AAL2 TOTP remain the access gates. An unlisted route is discoverable from public assets and grants no authority.
+Do not replace them with `https://*.vercel.app/**`. The former standalone operator callback is retired; the owner reported no old-host Auth redirect entries after deleting that hosting project. Database membership and AAL2 TOTP remain the access gates. An unlisted route is discoverable from public assets and grants no authority.
 
-Before the old project is deleted, verify the revised main-site deployment: direct player and account paths, `/v1/system/status`, password confirmation before registration, recovery, automatic operator routing, TOTP AAL2, current database grant checks, mobile layouts, and sign-out. Confirm its built and live operator assets come from the main-site project. Record redacted IDs/timestamps only—never passwords, tokens, email-link contents, QR payloads, or TOTP secrets.
+The revised main-site deployment was verified before the old project was deleted: direct player and account paths, password confirmation before registration, recovery, automatic operator routing, TOTP AAL2, current database grant checks, mobile layouts and sign-out. Its built and live operator assets come from the main-site project. Record redacted IDs/timestamps only—never passwords, tokens, email-link contents, QR payloads, or TOTP secrets.
 
 Current platform references: [Vercel monorepos](https://vercel.com/docs/monorepos), [shared packages and source outside Root Directory](https://vercel.com/docs/monorepos/monorepo-faq), [Vite SPA routing](https://vercel.com/docs/frameworks/frontend/vite), [Vercel environment variables](https://vercel.com/docs/environment-variables), and [Supabase redirect URLs](https://supabase.com/docs/guides/auth/redirect-urls).

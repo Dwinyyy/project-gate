@@ -2,7 +2,7 @@
 
 This runbook implements the owner's requested flow: normal registration → owner assignment → main-site password sign-in → required authenticator enrollment/challenge → operator console. Assignment alone grants no authenticated operator session or administrative permissions. See [ADR 0010](../adr/0010-operator-assignment-and-routing.md).
 
-**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. The revised main-site bundle and neutral retired-host page are deployed at `bbb52ed` (2026-09-27). Automated and anonymous live checks passed, and the owner reported **New main-site operator round trip passed**: password/TOTP authorization, sign-out and reauthentication on this new route. The owner previously passed both recovery journeys on `5c1bc5c`.
+**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. The revised main-site bundle was deployed at `bbb52ed` (2026-09-27). Automated and anonymous live checks passed, and the owner reported **New main-site operator round trip passed**: password/TOTP authorization, sign-out and reauthentication on this new route. The owner previously passed both recovery journeys on `5c1bc5c`. The retired standalone Vercel project was removed; the old URL returns 404. The owner confirmed the main Supabase Site URL and no old-host Redirect URLs.
 
 ## Assign an account by email
 
@@ -44,13 +44,13 @@ After an authentication deployment, close or reload older player/operator tabs b
 6. Expect **AAL2 · Authorized** and **Operator session authorized.**
 7. Click **Sign out**, return to main-site sign-in and repeat the password/code challenge. A password-only session must never open authorized operator content.
 
-The old [standalone operator address](https://project-gate-operator.vercel.app) now serves only a neutral handoff to main-site sign-in. The maintained operator interface is embedded in the main site. The old hosting project remains until the owner deletes it using the steps below.
+The maintained operator interface is embedded in the main site. The old standalone operator address returns 404 after its Vercel project was removed on 2026-09-27.
 
 Ordinary sign-out revokes the session that started it. Password replacement requests global revocation of that account's refresh sessions, including a newer login to the same account. A concurrent different-account login must be preserved. If the provider cannot confirm revocation, the app reports the partial outcome rather than claiming complete sign-out.
 
 ## Remove operator access
 
-Removing a person's operator access is separate from retiring the old hosting project. To remove the old website itself, use the following section after its deployment prerequisite passes.
+Removing a person's operator access is separate from the completed retirement of the old hosting project.
 
 1. Open the same **project-gate → SQL Editor → New query**.
 2. Run the assignment query with the exact target email, `p_status => 'suspended'`, your name and a removal reason.
@@ -81,13 +81,13 @@ This prepares safely escaped SQL without changing access. Execute the reviewed s
 
 Record nonsecret build revisions, receipt IDs and outcomes. The actual owner-entered main-site journey and enrolled-account email recovery remain required acceptance evidence; automated tests and publicly rendered shells do not replace them.
 
-## Delete the retired standalone website
+## Completed retirement of the standalone website
 
-Owner request, 2026-09-25: after the main-site operator panel works independently, remove `https://project-gate-operator.vercel.app/` as an accessible website. The owner will perform the deletion. No hosting project has been deleted by this task.
+Owner request, 2026-09-25: after the main-site operator panel works independently, remove `https://project-gate-operator.vercel.app/` as an accessible website. The owner confirmed deletion on 2026-09-27. Vercel no longer lists project `prj_vLLpAR6loaOPhG5fD2AWvGGn6w3m`; the old URL returns 404. The owner reported that the Supabase Site URL points to the main site and no old-host Redirect URL remains. The steps below are a historical record of the owner handoff, not a pending action.
 
 **Prerequisite met on 2026-09-27:** the revised player deployment was verified, including its embedded operator assets, same-site entry, anonymous authentication boundary, registration confirmation and no production request to the standalone operator host. The owner reported a fresh password/TOTP authorization, sign-out and reauthentication round trip on `/_system/console/`. The operator source directory remains part of the repository because the main-site build compiles it directly.
 
-Remove any retired Auth redirect origin, then delete the old Vercel project:
+The completed owner handoff was:
 
 1. Open [project-gate → Supabase Auth URL Configuration](https://supabase.com/dashboard/project/zsejplglpfcmcikcydgb/auth/url-configuration). Confirm **Site URL** points to the main site, not the old operator site. If the **Redirect URLs** list includes `https://project-gate-operator.vercel.app/auth/callback` or any other URL on that old host, remove only those old-host entries and save if the dashboard asks. Keep the main-site `/auth/callback` and `/account/recovery` URLs.
 2. Open the [Vercel dashboard](https://vercel.com/dashboard) and select the team containing the Project Gate projects.
@@ -96,6 +96,6 @@ Remove any retired Auth redirect origin, then delete the old Vercel project:
 5. Scroll to **Delete Project** and click **Delete**.
 6. In the dialog, enter `project-gate-operator` and the additional confirmation text the dialog requests, then click **Continue**.
 7. Open the old operator URL in a new tab: it should no longer serve the application. Open [main-site sign-in](https://project-gate-player.vercel.app/account/sign-in) and confirm assigned operators still reach their panel after password/authenticator verification.
-8. Report **Old operator project removed**, or the failed step and nonsecret error, so the external state can be checked and recorded.
+8. Report **Old operator project removed**, so the external state can be checked and recorded. The owner did so on 2026-09-27.
 
 Vercel project deletion removes that project's deployments, domains, environment variables and settings. The selected target is only the standalone frontend project; retain `project-gate-player`, the shared Git repository, Supabase and Render. The main-site bundle contains the operator interface and does not fetch it from the deleted host. Follow [Vercel's current project-deletion instructions](https://vercel.com/docs/projects/managing-projects#deleting-a-project) and [Supabase's redirect-URL guidance](https://supabase.com/docs/guides/auth/redirect-urls), checked on 2026-09-27. This handoff does not authorize deletion of another service.
