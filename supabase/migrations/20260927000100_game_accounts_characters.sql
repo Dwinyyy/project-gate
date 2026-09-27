@@ -3,7 +3,9 @@ CREATE SCHEMA game;
 REVOKE ALL ON SCHEMA game FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA game REVOKE ALL ON TABLES FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA game REVOKE ALL ON SEQUENCES FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES IN SCHEMA game REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+-- Future game-function migrations must REVOKE EXECUTE FROM PUBLIC in the same
+-- transaction as CREATE FUNCTION; schema-local defaults cannot override the
+-- global PostgreSQL default that grants function execution to PUBLIC.
 
 CREATE TABLE game.accounts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -18,7 +20,7 @@ CREATE TABLE game.characters (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id uuid NOT NULL REFERENCES game.accounts(id) ON DELETE RESTRICT,
   display_alias text NOT NULL CHECK (
-    length(display_alias) BETWEEN 1 AND 40 AND length(btrim(display_alias)) > 0
+    length(display_alias) BETWEEN 1 AND 40 AND display_alias ~ '[^[:space:]]'
   ),
   life_state text NOT NULL DEFAULT 'alive' CHECK (
     life_state IN ('alive', 'incapacitated', 'dead')

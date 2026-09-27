@@ -189,7 +189,7 @@ test('invalid character values and missing parent accounts fail at the database 
         ),
       ).rejects.toMatchObject({ code: '23514' });
     }
-    for (const alias of ['', ' ', 'x'.repeat(41)]) {
+    for (const alias of ['', ' ', '\t', '\n', ' \t\n ', 'x'.repeat(41), 'é'.repeat(41)]) {
       await expect(
         owner.query('INSERT INTO game.characters(account_id, display_alias) VALUES ($1, $2)', [
           accountId,
@@ -206,6 +206,7 @@ test('invalid character values and missing parent accounts fail at the database 
       owner.query('INSERT INTO game.accounts(revision) VALUES (-1)'),
     ).rejects.toMatchObject({ code: '23514' });
   } finally {
+    await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
     await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
   }
 });
