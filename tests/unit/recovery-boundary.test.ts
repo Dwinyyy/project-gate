@@ -121,7 +121,13 @@ function fixture(options: { factors?: Array<{ factor_type: string; status: strin
   const app = buildApp({
     logger: false,
     auth: { publicConfig, verifier },
-    operators: { findActiveOperator: operatorLookup },
+    operators: {
+      findOperatorStatus: async () => {
+        await operatorLookup();
+        return 'active';
+      },
+      findActiveOperator: operatorLookup,
+    },
   });
   apps.push(app);
   return {

@@ -174,6 +174,39 @@ describe('Supabase access-token verifier', () => {
   });
 
   it.each([
+    ['current ban', { banned_until: new Date(Date.now() + 60_000).toISOString() }, null],
+    ['expired ban', { banned_until: new Date(Date.now() - 60_000).toISOString() }, 'standard'],
+    ['deleted user', { deleted_at: '2026-09-01T00:00:00Z' }, null],
+    ['anonymous user', { is_anonymous: true }, null],
+    ['invalid ban date', { banned_until: 'not-a-date' }, null],
+    ['invalid deletion status', { deleted_at: false }, null],
+    ['invalid anonymous status', { is_anonymous: 'false' }, null],
+  ])(
+    'checks provider current status for an already-issued token: %s',
+    async (_label, status, expectedMode) => {
+      const token = accessToken();
+      const verifier = createSupabaseAuthVerifier({
+        supabaseUrl: 'https://project.supabase.co',
+        publishableKey: 'sb_publishable_example',
+        fetch: providerFetch(
+          token,
+          Response.json({
+            id: authUserId,
+            email: 'player@example.test',
+            email_confirmed_at: '2026-09-13T12:00:00.000Z',
+            banned_until: null,
+            deleted_at: null,
+            is_anonymous: false,
+            ...status,
+          }),
+        ),
+      });
+      const identity = await verifier.verify(token);
+      expect(identity?.accessMode ?? null).toBe(expectedMode);
+    },
+  );
+
+  it.each([
     ['expired token', { exp: Math.floor(Date.now() / 1000) - 1 }],
     ['mismatched subject', { sub: '33333333-3333-4333-8333-333333333333' }],
     ['unsupported assurance', { aal: 'aal3' }],

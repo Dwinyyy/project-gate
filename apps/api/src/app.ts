@@ -156,11 +156,16 @@ export function buildApp(options: ApiOptions = {}) {
           .send({ error: { code: 'PASSWORD_SIGN_IN_REQUIRED', requestId: request.id } });
       }
       const identity = verified.identity;
-      let operator;
+      let operatorStatus;
       try {
-        operator = await options.operators.findActiveOperator(identity.authUserId);
+        operatorStatus = await options.operators.findOperatorStatus(identity.authUserId);
       } catch {
         return reply.code(503).send({ error: { code: 'AUTH_UNAVAILABLE', requestId: request.id } });
+      }
+      if (operatorStatus === 'suspended') {
+        return reply
+          .code(403)
+          .send({ error: { code: 'OPERATOR_SUSPENDED', requestId: request.id } });
       }
       const session: SelfSession = {
         authUserId: identity.authUserId,
@@ -168,7 +173,7 @@ export function buildApp(options: ApiOptions = {}) {
         emailVerified: identity.emailVerified,
         sessionId: identity.sessionId,
         aal: identity.aal,
-        applicationRole: operator ? 'operator' : 'player',
+        applicationRole: operatorStatus === 'active' ? 'operator' : 'player',
       };
       return reply.code(200).send(session);
     },

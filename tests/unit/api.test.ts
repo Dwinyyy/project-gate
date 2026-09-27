@@ -142,7 +142,7 @@ describe('foundation API trust boundaries', () => {
           verify: async (token) => (token === 'valid-session-token' ? identity : null),
         },
       },
-      operators: { findActiveOperator: async () => null },
+      operators: { findOperatorStatus: async () => null, findActiveOperator: async () => null },
     });
     apps.push(app);
 
@@ -183,7 +183,10 @@ describe('foundation API trust boundaries', () => {
           }),
         },
       },
-      operators: { findActiveOperator: async () => ({ authUserId, permissions: [] }) },
+      operators: {
+        findOperatorStatus: async () => 'active',
+        findActiveOperator: async () => ({ authUserId, permissions: [] }),
+      },
     });
     apps.push(app);
     const headers = { authorization: 'Bearer assigned-password-token' };
@@ -193,6 +196,79 @@ describe('foundation API trust boundaries', () => {
     const protectedSession = await app.inject({ url: '/v1/operator/session', headers });
     expect(protectedSession.statusCode).toBe(403);
     expect(protectedSession.json()).toMatchObject({ error: { code: 'MFA_REQUIRED' } });
+  });
+
+  it('denies a suspended operator on the self-session route instead of routing as player', async () => {
+    const authUserId = '11111111-1111-4111-8111-111111111111';
+    const app = buildApp({
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async () => ({
+            authUserId,
+            email: 'assigned@example.test',
+            emailVerified: true,
+            hasVerifiedTotp: false,
+            totpAuthenticated: false,
+            sessionId: null,
+            aal: 'aal1',
+            accessMode: 'standard',
+          }),
+        },
+      },
+      operators: {
+        findOperatorStatus: async () => 'suspended',
+        findActiveOperator: async () => null,
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      url: '/v1/auth/session',
+      headers: { authorization: 'Bearer valid-password-token' },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ error: { code: 'OPERATOR_SUSPENDED' } });
+    expect(response.json()).not.toHaveProperty('applicationRole');
+  });
+
+  it('returns service unavailable when current operator status lookup fails', async () => {
+    const app = buildApp({
+      auth: {
+        publicConfig: {
+          supabaseUrl: 'https://project.supabase.co',
+          supabasePublishableKey: 'sb_publishable_example',
+        },
+        verifier: {
+          verify: async () => ({
+            authUserId: '11111111-1111-4111-8111-111111111111',
+            email: 'player@example.test',
+            emailVerified: true,
+            hasVerifiedTotp: false,
+            totpAuthenticated: false,
+            sessionId: null,
+            aal: 'aal1',
+            accessMode: 'standard',
+          }),
+        },
+      },
+      operators: {
+        findOperatorStatus: async () => {
+          throw new Error('private database details');
+        },
+        findActiveOperator: async () => null,
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      url: '/v1/auth/session',
+      headers: { authorization: 'Bearer valid-password-token' },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ error: { code: 'AUTH_UNAVAILABLE' } });
+    expect(response.body).not.toContain('private database details');
   });
 
   it('fails closed when the operator assignment store is unavailable', async () => {
@@ -218,6 +294,9 @@ describe('foundation API trust boundaries', () => {
     const failedStore = buildApp({
       auth,
       operators: {
+        findOperatorStatus: async () => {
+          throw new Error('private database details');
+        },
         findActiveOperator: async () => {
           throw new Error('private database details');
         },
@@ -250,7 +329,7 @@ describe('foundation API trust boundaries', () => {
             },
           },
         },
-        operators: { findActiveOperator: async () => null },
+        operators: { findOperatorStatus: async () => null, findActiveOperator: async () => null },
       });
       apps.push(app);
 
@@ -286,6 +365,7 @@ describe('foundation API trust boundaries', () => {
         },
       },
       operators: {
+        findOperatorStatus: async () => 'active',
         findActiveOperator: async () => ({
           authUserId,
           permissions: ['feature_controls:read'],
@@ -323,7 +403,7 @@ describe('foundation API trust boundaries', () => {
           }),
         },
       },
-      operators: { findActiveOperator: async () => null },
+      operators: { findOperatorStatus: async () => null, findActiveOperator: async () => null },
     });
     apps.push(app);
 
@@ -358,6 +438,7 @@ describe('foundation API trust boundaries', () => {
         },
       },
       operators: {
+        findOperatorStatus: async () => 'active',
         findActiveOperator: async () => ({
           authUserId,
           permissions: ['feature_controls:read'],
@@ -406,7 +487,10 @@ describe('foundation API trust boundaries', () => {
             }),
           },
         },
-        operators: { findActiveOperator: async () => ({ authUserId, permissions: [] }) },
+        operators: {
+          findOperatorStatus: async () => 'active',
+          findActiveOperator: async () => ({ authUserId, permissions: [] }),
+        },
       });
       apps.push(app);
       const response = await app.inject({
@@ -442,6 +526,10 @@ describe('foundation API trust boundaries', () => {
           verifier: { verify: async () => recoveryIdentity },
         },
         operators: {
+          findOperatorStatus: async () => {
+            operatorLookups += 1;
+            return 'active';
+          },
           findActiveOperator: async () => {
             operatorLookups += 1;
             return { authUserId, permissions: ['feature_controls:read'] };
@@ -505,6 +593,7 @@ describe('foundation API trust boundaries', () => {
         verifier,
       },
       operators: {
+        findOperatorStatus: async () => (assigned ? 'active' : null),
         findActiveOperator: async () =>
           assigned ? { authUserId, permissions: ['feature_controls:read'] } : null,
       },

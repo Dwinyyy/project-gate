@@ -4,6 +4,7 @@ import { Pool, type PoolClient, type PoolConfig } from 'pg';
 export {
   createOperatorAccessStore,
   findActiveOperator,
+  findOperatorStatus,
   type OperatorAccess,
   type OperatorAccessStore,
 } from './operator-access.js';

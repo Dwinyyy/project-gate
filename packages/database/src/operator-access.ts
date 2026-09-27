@@ -7,6 +7,18 @@ export interface OperatorAccess {
 
 export interface OperatorAccessStore {
   findActiveOperator(authUserId: string): Promise<OperatorAccess | null>;
+  findOperatorStatus(authUserId: string): Promise<'active' | 'suspended' | null>;
+}
+
+export async function findOperatorStatus(
+  pool: Pool,
+  authUserId: string,
+): Promise<'active' | 'suspended' | null> {
+  const result = await pool.query<{ status: 'active' | 'suspended' }>(
+    'SELECT status FROM ops.operator_accounts WHERE auth_user_id = $1',
+    [authUserId],
+  );
+  return result.rows[0]?.status ?? null;
 }
 
 interface OperatorAccessRow {
@@ -36,5 +48,8 @@ export async function findActiveOperator(
 }
 
 export function createOperatorAccessStore(pool: Pool): OperatorAccessStore {
-  return { findActiveOperator: (authUserId) => findActiveOperator(pool, authUserId) };
+  return {
+    findActiveOperator: (authUserId) => findActiveOperator(pool, authUserId),
+    findOperatorStatus: (authUserId) => findOperatorStatus(pool, authUserId),
+  };
 }
