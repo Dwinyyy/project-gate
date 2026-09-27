@@ -50,3 +50,10 @@ export const errorResponseSchema = {
 } as const;
 
 export type ErrorResponse = FromSchema<typeof errorResponseSchema>;
+
+export {
+  meResponseSchema,
+  characterCreationResponseSchema,
+  type MeResponse,
+  type CharacterCreationResponse,
+} from './character.js';

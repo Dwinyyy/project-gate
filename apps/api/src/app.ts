@@ -14,40 +14,18 @@ import {
   type SelfSession,
   type SystemStatus,
 } from '@hunter-world/contracts';
-import type { AuthIdentity, AuthVerifier } from '@hunter-world/server';
-import type { OperatorAccessStore } from '@hunter-world/database';
+import type { AuthVerifier } from '@hunter-world/server';
+import type { CharacterStore, OperatorAccessStore } from '@hunter-world/database';
+import { registerCharacterRoutes } from './character-routes.js';
+import { verifyStandardIdentity } from './identity.js';
 
 export interface ApiOptions {
   logger?: boolean;
   database?: { ready(): Promise<boolean> };
   auth?: { publicConfig: AuthConfig; verifier: AuthVerifier };
   operators?: OperatorAccessStore;
+  characters?: CharacterStore;
   revision?: string;
-}
-
-function bearerToken(authorization: string | undefined): string | null {
-  if (!authorization || authorization.length > 8192) return null;
-  const match = /^Bearer ([^\s,]+)$/.exec(authorization);
-  return match?.[1] ?? null;
-}
-
-type StandardIdentityResult =
-  | { kind: 'invalid' }
-  | { kind: 'recovery' }
-  | { kind: 'restricted' }
-  | { kind: 'standard'; identity: AuthIdentity };
-
-async function verifyStandardIdentity(
-  authorization: string | undefined,
-  verifier: AuthVerifier,
-): Promise<StandardIdentityResult> {
-  const token = bearerToken(authorization);
-  if (!token) return { kind: 'invalid' };
-  const identity = await verifier.verify(token);
-  if (!identity) return { kind: 'invalid' };
-  if (identity.accessMode === 'recovery') return { kind: 'recovery' };
-  if (identity.accessMode !== 'standard') return { kind: 'restricted' };
-  return { kind: 'standard', identity };
 }
 
 export function buildApp(options: ApiOptions = {}) {
@@ -121,6 +99,10 @@ export function buildApp(options: ApiOptions = {}) {
       return reply.code(200).send(options.auth.publicConfig);
     },
   );
+  registerCharacterRoutes(app, {
+    ...(options.auth ? { auth: options.auth.verifier } : {}),
+    ...(options.characters ? { characters: options.characters } : {}),
+  });
   app.get(
     '/v1/auth/session',
     {

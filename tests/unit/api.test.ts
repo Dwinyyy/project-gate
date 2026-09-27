@@ -64,10 +64,20 @@ describe('foundation API trust boundaries', () => {
       expect(response.body).not.toMatch(/DATABASE_URL|stack|secret/i);
     },
   );
-  it('does not expose game mutation endpoints or a location override', async () => {
+  it('does not expose location or rewards overrides and fails closed on character creation', async () => {
     const app = buildApp({ logger: false });
     apps.push(app);
-    for (const url of ['/v1/characters', '/v1/dev/location', '/v1/rewards']) {
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/v1/characters',
+          headers: { 'idempotency-key': '33333333-3333-4333-8333-333333333333' },
+          payload: { displayAlias: 'Civilian' },
+        })
+      ).statusCode,
+    ).toBe(503);
+    for (const url of ['/v1/dev/location', '/v1/rewards']) {
       expect((await app.inject({ method: 'POST', url, payload: {} })).statusCode).toBe(404);
     }
   });
