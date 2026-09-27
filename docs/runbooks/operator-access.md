@@ -2,7 +2,7 @@
 
 This runbook implements the owner's requested flow: normal registration → owner assignment → main-site password sign-in → required authenticator enrollment/challenge → operator console. Assignment alone grants no authenticated operator session or administrative permissions. See [ADR 0010](../adr/0010-operator-assignment-and-routing.md).
 
-**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. The revised main-site bundle and neutral retired-host page are deployed at `bbb52ed` (2026-09-27). Automated and anonymous live checks passed; the owner's password/TOTP round trip on this new route is pending. The owner previously passed the main-site operator round trip and both recovery journeys on `5c1bc5c`.
+**Development deployment:** canonical migration `20260922025156_operator_assignment_routing.sql` is applied. The revised main-site bundle and neutral retired-host page are deployed at `bbb52ed` (2026-09-27). Automated and anonymous live checks passed, and the owner reported **New main-site operator round trip passed**: password/TOTP authorization, sign-out and reauthentication on this new route. The owner previously passed both recovery journeys on `5c1bc5c`.
 
 ## Assign an account by email
 
@@ -85,9 +85,9 @@ Record nonsecret build revisions, receipt IDs and outcomes. The actual owner-ent
 
 Owner request, 2026-09-25: after the main-site operator panel works independently, remove `https://project-gate-operator.vercel.app/` as an accessible website. The owner will perform the deletion. No hosting project has been deleted by this task.
 
-**Prerequisite:** the revised player deployment must be verified first, including its embedded operator assets, same-site entry, authentication boundary and registration confirmation. The owner must also pass a fresh password/TOTP sign-in, authorization, sign-out and reauthentication round trip on the new `/_system/console/` route. Preparation, automated tests and anonymous live checks alone do not satisfy this private-authentication prerequisite. The main site must make no production request to the standalone operator host. The operator source directory remains part of the repository because the main-site build compiles it directly.
+**Prerequisite met on 2026-09-27:** the revised player deployment was verified, including its embedded operator assets, same-site entry, anonymous authentication boundary, registration confirmation and no production request to the standalone operator host. The owner reported a fresh password/TOTP authorization, sign-out and reauthentication round trip on `/_system/console/`. The operator source directory remains part of the repository because the main-site build compiles it directly.
 
-After Codex reports this prerequisite verified, remove any retired Auth redirect origin, then delete the old Vercel project:
+Remove any retired Auth redirect origin, then delete the old Vercel project:
 
 1. Open [project-gate → Supabase Auth URL Configuration](https://supabase.com/dashboard/project/zsejplglpfcmcikcydgb/auth/url-configuration). Confirm **Site URL** points to the main site, not the old operator site. If the **Redirect URLs** list includes `https://project-gate-operator.vercel.app/auth/callback` or any other URL on that old host, remove only those old-host entries and save if the dashboard asks. Keep the main-site `/auth/callback` and `/account/recovery` URLs.
 2. Open the [Vercel dashboard](https://vercel.com/dashboard) and select the team containing the Project Gate projects.
