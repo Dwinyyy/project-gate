@@ -31,7 +31,7 @@ Current previews:
 
 ## 2. First /goal: complete the playable prototype through Phase 6
 
-Owner-selected boundary: finish the remaining work in **Phases 2–6**, with **Android as the first physical-device target**. Of the initial 37 unfinished tasks, **34 remain** after Tasks 2.1–2.3 completion. Do not quietly expand this goal into multiplayer, store release or all later phases. Keep prototype gameplay and initial death experiments limited to designated development test accounts.
+Owner-selected boundary: finish the remaining work in **Phases 2–6**, with **Android as the first physical-device target**. Of the initial 37 unfinished tasks, **33 remain** after Tasks 2.1–2.4 completion. Do not quietly expand this goal into multiplayer, store release or all later phases. Keep prototype gameplay and initial death experiments limited to designated development test accounts.
 
 The intended experience is: create one persistent unawakened character; use the System and private/public identity views; find a reviewed hub; interact with an NPC; finish useful civilian work; receive an actual inventory/wallet reward; enter an eligible solo Gate; make tactical decisions; extract or receive a recorded consequence; reconnect to the same authoritative state.
 
