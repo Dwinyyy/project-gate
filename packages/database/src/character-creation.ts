@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import { authorizeCharacterOperation } from './character-authority.js';
 import { withTransaction } from './index.js';
 
-export type CreationStatus = 'available' | 'occupied' | 'cooldown' | 'feature_disabled';
+export type CreationStatus =
+  'available' | 'occupied' | 'cooldown' | 'feature_disabled' | 'restricted';
 
 export type MeResult =
   | { kind: 'operator_only' | 'auth_ineligible' }
   | {
       kind: 'player';
-      schemaVersion: 1;
+      schemaVersion: 2;
+      mode: 'onboarding' | 'active' | 'incapacitated' | 'observer' | 'restricted';
       character: {
         id: string;
         displayAlias: string;
@@ -16,6 +19,7 @@ export type MeResult =
         awakeningState: 'unawakened' | 'awakened';
         presenceState: 'sheltered' | 'active' | 'committed';
         profileVisibility: 'private' | 'limited' | 'public';
+        revision: string;
         createdAt: string;
       } | null;
       creation: { status: CreationStatus; notBefore: string | null };
@@ -29,7 +33,15 @@ export type CreateCharacterResult =
       createdAt: string;
       replayed: boolean;
     }
-  | { kind: 'operator_only' | 'auth_ineligible' | 'disabled' | 'occupied' | 'operation_conflict' }
+  | {
+      kind:
+        | 'operator_only'
+        | 'auth_ineligible'
+        | 'account_restricted'
+        | 'disabled'
+        | 'occupied'
+        | 'operation_conflict';
+    }
   | { kind: 'cooldown'; notBefore: string };
 
 export interface CharacterStore {
@@ -44,6 +56,7 @@ export interface CharacterStore {
 interface AccountRow {
   id: string;
   character_creation_not_before: Date | null;
+  access_state: 'active' | 'restricted';
 }
 
 interface CharacterRow {
@@ -53,6 +66,7 @@ interface CharacterRow {
   awakening_state: 'unawakened' | 'awakened';
   presence_state: 'sheltered' | 'active' | 'committed';
   profile_visibility: 'private' | 'limited' | 'public';
+  revision: string;
   created_at: Date;
 }
 
@@ -68,29 +82,13 @@ function isUuid(value: string): boolean {
   return uuidPattern.test(value);
 }
 
-async function hasOperatorRow(client: PoolClient, authUserId: string): Promise<boolean> {
-  const result = await client.query(
-    'SELECT 1 FROM ops.operator_accounts WHERE auth_user_id = $1::uuid',
-    [authUserId],
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
-async function eligibleAuthUser(client: PoolClient, authUserId: string): Promise<boolean> {
-  const result = await client.query<{ eligible: boolean }>(
-    'SELECT game.lock_eligible_auth_user($1::uuid) AS eligible',
-    [authUserId],
-  );
-  return result.rows[0]?.eligible === true;
-}
-
 async function livingCharacter(
   client: PoolClient,
   accountId: string,
 ): Promise<CharacterRow | null> {
   const result = await client.query<CharacterRow>(
     `SELECT id, display_alias, life_state, awakening_state, presence_state,
-            profile_visibility, created_at
+            profile_visibility, revision::text AS revision, created_at
        FROM game.characters
       WHERE account_id = $1::uuid AND life_state IN ('alive', 'incapacitated')`,
     [accountId],
@@ -103,30 +101,59 @@ export function createCharacterStore(pool: Pool): CharacterStore {
     async getMe(authUserId) {
       if (!isUuid(authUserId)) return { kind: 'auth_ineligible' };
       return withTransaction(pool, async (client) => {
-        if (await hasOperatorRow(client, authUserId)) return { kind: 'operator_only' };
-        if (!(await eligibleAuthUser(client, authUserId))) return { kind: 'auth_ineligible' };
+        const authority = await authorizeCharacterOperation(client, {
+          authUserId,
+          operation: 'account.records.read',
+        });
+        if (authority.kind === 'denied') {
+          return {
+            kind: authority.reason === 'operator_only' ? 'operator_only' : 'auth_ineligible',
+          };
+        }
         const controls = await client.query<{ characters: boolean }>(
           'SELECT characters FROM ops.feature_controls WHERE singleton',
         );
         if (!controls.rows[0]) throw new Error('Feature controls are missing');
         const account = await client.query<AccountRow>(
-          'SELECT id, character_creation_not_before FROM game.accounts WHERE auth_user_id = $1::uuid',
-          [authUserId],
+          'SELECT id, character_creation_not_before, access_state FROM game.accounts WHERE id = $1::uuid',
+          [authority.accountId],
         );
         const row = account.rows[0];
         const living = row ? await livingCharacter(client, row.id) : null;
+        const hasDeadHistory =
+          row && !living
+            ? (
+                await client.query(
+                  "SELECT 1 FROM game.characters WHERE account_id = $1::uuid AND life_state = 'dead' LIMIT 1",
+                  [row.id],
+                )
+              ).rowCount !== 0
+            : false;
         const now = await client.query<{ now: Date }>('SELECT clock_timestamp() AS now');
         const notBefore = row?.character_creation_not_before ?? null;
-        const status: CreationStatus = !controls.rows[0].characters
-          ? 'feature_disabled'
+        const restricted = row?.access_state === 'restricted';
+        const mode = restricted
+          ? 'restricted'
           : living
-            ? 'occupied'
-            : notBefore && notBefore > now.rows[0]!.now
-              ? 'cooldown'
-              : 'available';
+            ? living.life_state === 'alive'
+              ? 'active'
+              : 'incapacitated'
+            : hasDeadHistory || notBefore
+              ? 'observer'
+              : 'onboarding';
+        const status: CreationStatus = restricted
+          ? 'restricted'
+          : !controls.rows[0].characters
+            ? 'feature_disabled'
+            : living
+              ? 'occupied'
+              : notBefore && notBefore > now.rows[0]!.now
+                ? 'cooldown'
+                : 'available';
         return {
           kind: 'player',
-          schemaVersion: 1,
+          schemaVersion: 2,
+          mode,
           character: living
             ? {
                 id: living.id,
@@ -135,6 +162,7 @@ export function createCharacterStore(pool: Pool): CharacterStore {
                 awakeningState: living.awakening_state,
                 presenceState: living.presence_state,
                 profileVisibility: living.profile_visibility,
+                revision: living.revision,
                 createdAt: living.created_at.toISOString(),
               }
             : null,
@@ -152,34 +180,29 @@ export function createCharacterStore(pool: Pool): CharacterStore {
       const fingerprint = createHash('sha256').update(displayAlias, 'utf8').digest();
       try {
         return await withTransaction(pool, async (client): Promise<CreateCharacterResult> => {
-          // Match the audited assignment routine's canonical UUID-text lock key.
-          await client.query(
-            "SELECT pg_advisory_xact_lock(hashtextextended('operator-account:' || $1::uuid::text, 0))",
-            [authUserId],
-          );
-          if (await hasOperatorRow(client, authUserId)) return { kind: 'operator_only' };
-          const controls = await client.query<{ characters: boolean }>(
-            'SELECT characters FROM ops.feature_controls WHERE singleton FOR SHARE',
-          );
-          if (!controls.rows[0]) throw new Error('Feature controls are missing');
-          if (!(await eligibleAuthUser(client, authUserId))) return { kind: 'auth_ineligible' };
-          let account = await client.query<AccountRow>(
-            'SELECT id, character_creation_not_before FROM game.accounts WHERE auth_user_id = $1::uuid',
-            [authUserId],
-          );
-          if (!account.rows[0]) {
-            if (!controls.rows[0].characters) return { kind: 'disabled' };
+          const authority = await authorizeCharacterOperation(client, {
+            authUserId,
+            operation: 'character.create',
+          });
+          if (authority.kind === 'denied') {
+            if (authority.reason === 'operator_only') return { kind: 'operator_only' };
+            if (authority.reason === 'account_restricted') return { kind: 'account_restricted' };
+            return { kind: 'auth_ineligible' };
+          }
+          if (!authority.accountId) {
+            if (!authority.charactersEnabled) return { kind: 'disabled' };
             await client.query(
               'INSERT INTO game.accounts(auth_user_id) VALUES ($1::uuid) ON CONFLICT (auth_user_id) DO NOTHING',
               [authUserId],
             );
           }
-          account = await client.query<AccountRow>(
-            'SELECT id, character_creation_not_before FROM game.accounts WHERE auth_user_id = $1::uuid FOR UPDATE',
+          const account = await client.query<AccountRow>(
+            'SELECT id, character_creation_not_before, access_state FROM game.accounts WHERE auth_user_id = $1::uuid FOR UPDATE',
             [authUserId],
           );
           const accountRow = account.rows[0];
           if (!accountRow) throw new Error('Account link was not resolved');
+          if (accountRow.access_state !== 'active') return { kind: 'account_restricted' };
           const receipt = await client.query<ReceiptRow>(
             'SELECT character_id, request_fingerprint, created_at FROM game.character_creation_receipts WHERE account_id = $1::uuid AND operation_id = $2::uuid',
             [accountRow.id, operationId],
@@ -195,7 +218,7 @@ export function createCharacterStore(pool: Pool): CharacterStore {
               replayed: true,
             };
           }
-          if (!controls.rows[0].characters) return { kind: 'disabled' };
+          if (!authority.charactersEnabled) return { kind: 'disabled' };
           const wallTime = await client.query<{ now: Date }>('SELECT clock_timestamp() AS now');
           if (
             accountRow.character_creation_not_before &&
