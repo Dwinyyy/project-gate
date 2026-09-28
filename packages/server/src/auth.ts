@@ -141,7 +141,7 @@ export function createSupabaseAuthVerifier(options: SupabaseAuthVerifierOptions)
         if (
           user.email_confirmed_at !== undefined &&
           user.email_confirmed_at !== null &&
-          typeof user.email_confirmed_at !== 'string'
+          !validProviderTime(user.email_confirmed_at)
         )
           return null;
         if (user.factors !== undefined && !Array.isArray(user.factors)) return null;

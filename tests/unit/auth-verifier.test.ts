@@ -105,6 +105,50 @@ describe('Supabase access-token verifier', () => {
     await expect(verifier.verify(token)).resolves.toBeNull();
   });
 
+  it.each(['garbage', '2026-02-31T00:00:00Z'])(
+    'rejects malformed email confirmation time %s',
+    async (emailConfirmedAt) => {
+      const token = accessToken();
+      const verifier = createSupabaseAuthVerifier({
+        supabaseUrl: 'https://project.supabase.co',
+        publishableKey: 'sb_publishable_example',
+        fetch: providerFetch(
+          token,
+          Response.json({
+            id: authUserId,
+            is_anonymous: false,
+            email: 'player@example.test',
+            email_confirmed_at: emailConfirmedAt,
+          }),
+        ),
+      });
+
+      await expect(verifier.verify(token)).resolves.toBeNull();
+    },
+  );
+
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+  ])('keeps a %s email confirmation time unverified', async (_label, emailConfirmedAt) => {
+    const token = accessToken();
+    const verifier = createSupabaseAuthVerifier({
+      supabaseUrl: 'https://project.supabase.co',
+      publishableKey: 'sb_publishable_example',
+      fetch: providerFetch(
+        token,
+        Response.json({
+          id: authUserId,
+          is_anonymous: false,
+          email: 'player@example.test',
+          ...(emailConfirmedAt === undefined ? {} : { email_confirmed_at: emailConfirmedAt }),
+        }),
+      ),
+    });
+
+    await expect(verifier.verify(token)).resolves.toMatchObject({ emailVerified: false });
+  });
+
   it('does not treat non-TOTP AAL2 as an authenticator challenge', async () => {
     const token = accessToken({
       amr: [
