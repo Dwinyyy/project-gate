@@ -2,6 +2,13 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
 
 export {
+  authorizeCharacterOperation,
+  type CharacterAuthorityInput,
+  type CharacterAuthorityResult,
+  type CharacterOperation,
+} from './character-authority.js';
+
+export {
   createCharacterStore,
   type CharacterStore,
   type CreateCharacterResult,

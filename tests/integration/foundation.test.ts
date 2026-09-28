@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { prepareOperatorStatusChange } from '../../scripts/lib/operator-provisioning.js';
 import {
+  authorizeCharacterOperation,
+  type CharacterAuthorityInput,
   createDatabase,
   createCharacterStore,
   findActiveOperator,
@@ -1026,6 +1028,368 @@ async function removeCharacterCandidate(id: string): Promise<void> {
   await owner.query('DELETE FROM ops.operator_accounts WHERE auth_user_id = $1', [id]);
   await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
 }
+
+async function authorityCheck(input: CharacterAuthorityInput) {
+  return withTransaction(database.pool, (client) => authorizeCharacterOperation(client, input));
+}
+
+test('named reads remain available without an account and create reports the disabled flag', async () => {
+  const id = await characterCandidate();
+  try {
+    expect(await authorityCheck({ authUserId: id, operation: 'account.records.read' })).toEqual({
+      kind: 'allowed',
+      accountId: null,
+      charactersEnabled: null,
+    });
+    expect(await authorityCheck({ authUserId: id, operation: 'public.content.read' })).toEqual({
+      kind: 'allowed',
+      accountId: null,
+      charactersEnabled: null,
+    });
+    expect(await authorityCheck({ authUserId: id, operation: 'character.create' })).toEqual({
+      kind: 'allowed',
+      accountId: null,
+      charactersEnabled: false,
+    });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+  } finally {
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('profile authority requires an owned alive character and exact decimal revision', async () => {
+  const id = await characterCandidate();
+  const foreignId = await characterCandidate();
+  const accountId = (
+    await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+      [id],
+    )
+  ).rows[0]!.id;
+  const foreignAccountId = (
+    await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+      [foreignId],
+    )
+  ).rows[0]!.id;
+  const characterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias, revision) VALUES ($1, 'Exact revision', 9007199254740993) RETURNING id",
+      [accountId],
+    )
+  ).rows[0]!.id;
+  const otherCharacterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Foreign') RETURNING id",
+      [foreignAccountId],
+    )
+  ).rows[0]!.id;
+  const profile = (target: string, revision = '9007199254740993') => ({
+    authUserId: id,
+    operation: 'character.profile.update' as const,
+    characterId: target,
+    expectedRevision: revision,
+  });
+  try {
+    expect(await authorityCheck(profile(characterId))).toEqual({
+      kind: 'allowed',
+      accountId,
+      charactersEnabled: null,
+    });
+    expect(await authorityCheck(profile(characterId, '9007199254740992'))).toEqual({
+      kind: 'denied',
+      reason: 'stale_revision',
+    });
+    expect(await authorityCheck(profile(characterId, '01'))).toEqual({
+      kind: 'denied',
+      reason: 'stale_revision',
+    });
+    expect(await authorityCheck(profile(otherCharacterId))).toEqual({
+      kind: 'denied',
+      reason: 'character_missing',
+    });
+    expect(await authorityCheck(profile(randomUUID()))).toEqual({
+      kind: 'denied',
+      reason: 'character_missing',
+    });
+    expect(await authorityCheck(profile('invalid'))).toEqual({
+      kind: 'denied',
+      reason: 'character_missing',
+    });
+    expect(
+      await authorityCheck({ ...profile(characterId), operation: 'character.rescue.respond' }),
+    ).toEqual({ kind: 'denied', reason: 'rescue_unavailable' });
+    await owner.query("UPDATE game.characters SET life_state = 'incapacitated' WHERE id = $1", [
+      characterId,
+    ]);
+    expect(await authorityCheck(profile(characterId))).toEqual({
+      kind: 'denied',
+      reason: 'incapacitated',
+    });
+    expect(
+      await authorityCheck({ ...profile(characterId), operation: 'character.rescue.respond' }),
+    ).toEqual({ kind: 'denied', reason: 'incapacitated' });
+    await owner.query("UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [
+      characterId,
+    ]);
+    expect(await authorityCheck(profile(characterId))).toEqual({
+      kind: 'denied',
+      reason: 'dead_or_observer',
+    });
+    expect(
+      await authorityCheck({ ...profile(characterId), operation: 'character.rescue.respond' }),
+    ).toEqual({ kind: 'denied', reason: 'dead_or_observer' });
+    expect(await authorityCheck({ authUserId: id, operation: 'account.records.read' })).toEqual({
+      kind: 'allowed',
+      accountId,
+      charactersEnabled: null,
+    });
+    expect(await authorityCheck({ authUserId: id, operation: 'character.create' })).toEqual({
+      kind: 'allowed',
+      accountId,
+      charactersEnabled: false,
+    });
+  } finally {
+    await removeCharacterCandidate(id);
+    await removeCharacterCandidate(foreignId);
+  }
+});
+
+test('restriction keeps private and public reads but denies every named mutation', async () => {
+  const id = await characterCandidate();
+  const accountId = (
+    await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id, access_state) VALUES ($1, $2) RETURNING id',
+      [id, 'restricted'],
+    )
+  ).rows[0]!.id;
+  const characterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Restricted') RETURNING id",
+      [accountId],
+    )
+  ).rows[0]!.id;
+  try {
+    for (const operation of ['account.records.read', 'public.content.read'] as const) {
+      expect(await authorityCheck({ authUserId: id, operation })).toEqual({
+        kind: 'allowed',
+        accountId,
+        charactersEnabled: null,
+      });
+    }
+    expect(await authorityCheck({ authUserId: id, operation: 'character.create' })).toEqual({
+      kind: 'denied',
+      reason: 'account_restricted',
+    });
+    for (const operation of ['character.profile.update', 'character.rescue.respond'] as const) {
+      expect(
+        await authorityCheck({ authUserId: id, operation, characterId, expectedRevision: '0' }),
+      ).toEqual({ kind: 'denied', reason: 'account_restricted' });
+    }
+  } finally {
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('operator, unavailable Auth, malformed input and unknown operations fail closed', async () => {
+  const id = await characterCandidate();
+  const bannedId = await characterCandidate();
+  try {
+    await owner.query(prepareOperatorStatusChange(operatorRequest(id)));
+    await owner.query(
+      "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
+      [bannedId],
+    );
+    for (const operation of [
+      'account.records.read',
+      'public.content.read',
+      'character.create',
+    ] as const) {
+      expect(await authorityCheck({ authUserId: id, operation })).toEqual({
+        kind: 'denied',
+        reason: 'operator_only',
+      });
+      expect(await authorityCheck({ authUserId: bannedId, operation })).toEqual({
+        kind: 'denied',
+        reason: 'auth_ineligible',
+      });
+    }
+    await owner.query(
+      "UPDATE ops.operator_accounts SET status = 'suspended' WHERE auth_user_id = $1",
+      [id],
+    );
+    expect(await authorityCheck({ authUserId: id, operation: 'account.records.read' })).toEqual({
+      kind: 'denied',
+      reason: 'operator_only',
+    });
+    expect(
+      await authorityCheck({ authUserId: randomUUID(), operation: 'account.records.read' }),
+    ).toEqual({ kind: 'denied', reason: 'auth_ineligible' });
+    expect(
+      await authorityCheck({ authUserId: 'invalid', operation: 'account.records.read' }),
+    ).toEqual({ kind: 'denied', reason: 'auth_ineligible' });
+    await owner.query('UPDATE auth.users SET banned_until = NULL WHERE id = $1', [bannedId]);
+    expect(
+      await authorityCheck({
+        authUserId: bannedId,
+        operation: 'unknown',
+      } as unknown as CharacterAuthorityInput),
+    ).toEqual({ kind: 'denied', reason: 'auth_ineligible' });
+    expect(
+      await authorityCheck({
+        authUserId: bannedId,
+        operation: 'character.profile.update',
+      } as CharacterAuthorityInput),
+    ).toEqual({ kind: 'denied', reason: 'character_missing' });
+  } finally {
+    await removeCharacterCandidate(id);
+    await removeCharacterCandidate(bannedId);
+  }
+});
+
+async function waitForAuthorityBlock(pid: number, queryFragment: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await owner.query<{ waiting: boolean }>(
+            "SELECT wait_event_type = 'Lock' AND position($2 IN query) > 0 AS waiting FROM pg_stat_activity WHERE pid = $1",
+            [pid, queryFragment],
+          )
+        ).rows[0]?.waiting,
+      { timeout: 5_000, interval: 20 },
+    )
+    .toBe(true);
+}
+
+test.each(['restriction', 'death'] as const)(
+  '%s and profile actions serialize in both commit orders',
+  async (transition) => {
+    const id = await characterCandidate();
+    const accountId = (
+      await owner.query<{ id: string }>(
+        'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+        [id],
+      )
+    ).rows[0]!.id;
+    const characterId = (
+      await owner.query<{ id: string }>(
+        "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Race target') RETURNING id",
+        [accountId],
+      )
+    ).rows[0]!.id;
+    await owner.query(
+      'CREATE TABLE IF NOT EXISTS game.authority_test_actions(id uuid PRIMARY KEY, character_id uuid NOT NULL)',
+    );
+    await owner.query('GRANT INSERT ON game.authority_test_actions TO hunter_runtime');
+    const action = await database.pool.connect();
+    const state = await owner.connect();
+    const actionPid = (await action.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+      .rows[0]!.pid;
+    const statePid = (await state.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!
+      .pid;
+    expect(actionPid).not.toBe(statePid);
+    const changeSql =
+      transition === 'restriction'
+        ? "UPDATE game.accounts SET access_state = 'restricted' WHERE id = $1"
+        : "UPDATE game.characters SET life_state = 'dead' WHERE id = $1";
+    const targetId = transition === 'restriction' ? accountId : characterId;
+    const guardInput: CharacterAuthorityInput = {
+      authUserId: id,
+      operation: 'character.profile.update',
+      characterId,
+      expectedRevision: '0',
+    };
+    const deniedReason = transition === 'restriction' ? 'account_restricted' : 'dead_or_observer';
+    try {
+      await state.query('BEGIN');
+      await state.query(changeSql, [targetId]);
+      await action.query('BEGIN');
+      const blockedGuard = authorizeCharacterOperation(action, guardInput);
+      void blockedGuard.catch(() => undefined);
+      await waitForAuthorityBlock(
+        actionPid,
+        transition === 'restriction' ? 'FROM game.accounts' : 'FROM game.characters',
+      );
+      await state.query('COMMIT');
+      expect(await blockedGuard).toEqual({ kind: 'denied', reason: deniedReason });
+      await action.query('COMMIT');
+      expect(
+        (
+          await owner.query('SELECT id FROM game.authority_test_actions WHERE character_id = $1', [
+            characterId,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      expect(
+        (
+          await owner.query(
+            transition === 'restriction'
+              ? 'SELECT access_state AS state FROM game.accounts WHERE id = $1'
+              : 'SELECT life_state AS state FROM game.characters WHERE id = $1',
+            [targetId],
+          )
+        ).rows,
+      ).toEqual([{ state: transition === 'restriction' ? 'restricted' : 'dead' }]);
+
+      await owner.query(
+        transition === 'restriction'
+          ? "UPDATE game.accounts SET access_state = 'active' WHERE id = $1"
+          : "UPDATE game.characters SET life_state = 'alive' WHERE id = $1",
+        [targetId],
+      );
+      await action.query('BEGIN');
+      expect(await authorizeCharacterOperation(action, guardInput)).toEqual({
+        kind: 'allowed',
+        accountId,
+        charactersEnabled: null,
+      });
+      const markerId = randomUUID();
+      await action.query(
+        'INSERT INTO game.authority_test_actions(id, character_id) VALUES ($1, $2)',
+        [markerId, characterId],
+      );
+      await state.query('BEGIN');
+      const blockedTransition = state.query(changeSql, [targetId]);
+      void blockedTransition.catch(() => undefined);
+      await waitForAuthorityBlock(
+        statePid,
+        transition === 'restriction' ? 'UPDATE game.accounts' : 'UPDATE game.characters',
+      );
+      await action.query('COMMIT');
+      await blockedTransition;
+      await state.query('COMMIT');
+      expect(
+        (
+          await owner.query('SELECT id FROM game.authority_test_actions WHERE character_id = $1', [
+            characterId,
+          ])
+        ).rows,
+      ).toEqual([{ id: markerId }]);
+      expect(
+        (
+          await owner.query(
+            transition === 'restriction'
+              ? 'SELECT access_state AS state FROM game.accounts WHERE id = $1'
+              : 'SELECT life_state AS state FROM game.characters WHERE id = $1',
+            [targetId],
+          )
+        ).rows,
+      ).toEqual([{ state: transition === 'restriction' ? 'restricted' : 'dead' }]);
+    } finally {
+      await Promise.allSettled([action.query('ROLLBACK'), state.query('ROLLBACK')]);
+      action.release();
+      state.release();
+      await owner.query('DELETE FROM game.authority_test_actions WHERE character_id = $1', [
+        characterId,
+      ]);
+      await removeCharacterCandidate(id);
+    }
+  },
+  20_000,
+);
 
 test('character eligibility reads no account and respects feature state without writing', async () => {
   const id = await characterCandidate();
