@@ -74,6 +74,8 @@ function creationFailure(result: Exclude<CreateCharacterResult, { kind: 'created
       return { status: 403, code: 'OPERATOR_ONLY' };
     case 'auth_ineligible':
       return { status: 403, code: 'AUTH_INELIGIBLE' };
+    case 'account_restricted':
+      return { status: 403, code: 'ACCOUNT_RESTRICTED' };
     case 'disabled':
       return { status: 503, code: 'CHARACTER_CREATION_DISABLED' };
     case 'occupied':
@@ -114,7 +116,19 @@ export function registerCharacterRoutes(
           return failure(reply, request, 503, 'CHARACTER_SERVICE_UNAVAILABLE');
         return reply.code(200).send({
           schemaVersion: result.schemaVersion,
-          character: result.character,
+          mode: result.mode,
+          character: result.character
+            ? {
+                id: result.character.id,
+                displayAlias: result.character.displayAlias,
+                lifeState: result.character.lifeState,
+                awakeningState: result.character.awakeningState,
+                presenceState: result.character.presenceState,
+                profileVisibility: result.character.profileVisibility,
+                revision: result.character.revision,
+                createdAt: result.character.createdAt,
+              }
+            : null,
           creation: result.creation,
         });
       } catch {

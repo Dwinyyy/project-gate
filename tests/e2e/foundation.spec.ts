@@ -602,11 +602,23 @@ for (const { recovery, sameUser } of [
     );
     await expect(second.locator('body')).toHaveText(emailB);
     await expect
-      .poll(() =>
-        page.evaluate(
-          () => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
-        ),
-      )
+      .poll(async () => {
+        try {
+          return await page.evaluate(
+            () => JSON.parse(localStorage.getItem('sb-127-auth-token') ?? '{}').access_token,
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message.includes(
+              'Execution context was destroyed, most likely because of a navigation',
+            )
+          ) {
+            return undefined;
+          }
+          throw error;
+        }
+      })
       .toBe(sessionB.access_token);
     for (const tab of [page, second]) {
       await tab.evaluate(() => {

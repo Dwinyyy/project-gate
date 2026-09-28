@@ -3,9 +3,10 @@ import type { FromSchema } from 'json-schema-to-ts';
 export const meResponseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['schemaVersion', 'character', 'creation'],
+  required: ['schemaVersion', 'mode', 'character', 'creation'],
   properties: {
-    schemaVersion: { const: 1 },
+    schemaVersion: { const: 2 },
+    mode: { enum: ['onboarding', 'active', 'incapacitated', 'observer', 'restricted'] },
     character: {
       anyOf: [
         { type: 'null' },
@@ -19,6 +20,7 @@ export const meResponseSchema = {
             'awakeningState',
             'presenceState',
             'profileVisibility',
+            'revision',
             'createdAt',
           ],
           properties: {
@@ -28,6 +30,7 @@ export const meResponseSchema = {
             awakeningState: { enum: ['unawakened', 'awakened'] },
             presenceState: { enum: ['sheltered', 'active', 'committed'] },
             profileVisibility: { enum: ['private', 'limited', 'public'] },
+            revision: { type: 'string', pattern: '^(0|[1-9][0-9]*)$' },
             createdAt: { type: 'string', format: 'date-time' },
           },
         },
@@ -38,7 +41,7 @@ export const meResponseSchema = {
       additionalProperties: false,
       required: ['status', 'notBefore'],
       properties: {
-        status: { enum: ['available', 'occupied', 'cooldown', 'feature_disabled'] },
+        status: { enum: ['available', 'occupied', 'cooldown', 'feature_disabled', 'restricted'] },
         notBefore: { type: ['string', 'null'], format: 'date-time' },
       },
     },

@@ -25,7 +25,8 @@ const apps: FastifyInstance[] = [];
 const headers = { authorization: 'Bearer valid-token', 'idempotency-key': operationId };
 const player: MeResult = {
   kind: 'player',
-  schemaVersion: 1,
+  schemaVersion: 2,
+  mode: 'onboarding',
   character: null,
   creation: { status: 'feature_disabled', notBefore: null },
 };
@@ -65,7 +66,8 @@ describe('private character API', () => {
     const response = await makeApp({ characters: store() }).inject({ url: '/v1/me', headers });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      mode: 'onboarding',
       character: null,
       creation: { status: 'feature_disabled', notBefore: null },
     });
@@ -77,7 +79,8 @@ describe('private character API', () => {
     const response = await makeApp({
       characters: store({
         kind: 'player',
-        schemaVersion: 1,
+        schemaVersion: 2,
+        mode: 'incapacitated',
         character: {
           id: characterId,
           displayAlias: 'Civilian',
@@ -85,6 +88,7 @@ describe('private character API', () => {
           awakeningState: 'unawakened',
           presenceState: 'sheltered',
           profileVisibility: 'private',
+          revision: '9007199254740993',
           createdAt: '2026-09-27T10:00:00.000Z',
         },
         creation: { status: 'occupied', notBefore: null },
@@ -94,8 +98,75 @@ describe('private character API', () => {
     expect(response.json().character).toMatchObject({
       id: characterId,
       lifeState: 'incapacitated',
+      revision: '9007199254740993',
     });
     expect(response.body).not.toMatch(/accountId|deadHistory|preciseLocation|authUserId/);
+  });
+
+  it.each([
+    ['onboarding', 'available', null],
+    ['active', 'occupied', 'alive'],
+    ['incapacitated', 'occupied', 'incapacitated'],
+    ['observer', 'cooldown', null],
+    ['restricted', 'restricted', 'alive'],
+  ] as const)('projects the private %s mode and %s creation state', async (mode, status, life) => {
+    const privateFields = {
+      accountId: authUserId,
+      deadHistory: [{ id: 'private history' }],
+      providerStatus: 'private provider status',
+    };
+    const character = life
+      ? {
+          id: characterId,
+          displayAlias: 'Civilian',
+          lifeState: life,
+          awakeningState: 'unawakened' as const,
+          presenceState: 'sheltered' as const,
+          profileVisibility: 'private' as const,
+          revision: '9007199254740993',
+          createdAt: '2026-09-27T10:00:00.000Z',
+          accountId: authUserId,
+          moderationReason: 'private reason',
+          preciseLocation: 'private coordinates',
+        }
+      : null;
+    const response = await makeApp({
+      characters: store({
+        kind: 'player',
+        schemaVersion: 2,
+        mode,
+        character,
+        creation: {
+          status,
+          notBefore: status === 'cooldown' ? '2026-09-29T10:00:00.000Z' : null,
+        },
+        ...privateFields,
+      }),
+    }).inject({ url: '/v1/me?accountId=foreign&mode=active', headers });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      schemaVersion: 2,
+      mode,
+      character: character && {
+        id: characterId,
+        displayAlias: 'Civilian',
+        lifeState: life,
+        awakeningState: 'unawakened',
+        presenceState: 'sheltered',
+        profileVisibility: 'private',
+        revision: '9007199254740993',
+        createdAt: '2026-09-27T10:00:00.000Z',
+      },
+      creation: {
+        status,
+        notBefore: status === 'cooldown' ? '2026-09-29T10:00:00.000Z' : null,
+      },
+    });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(response.body).not.toMatch(
+      /accountId|deadHistory|moderationReason|preciseLocation|providerStatus/,
+    );
   });
 
   it('returns the same receipt for an authorized replay and no life claim', async () => {
@@ -245,6 +316,7 @@ describe('private character API', () => {
   });
 
   it.each([
+    ['account_restricted', 403, 'ACCOUNT_RESTRICTED'],
     ['disabled', 503, 'CHARACTER_CREATION_DISABLED'],
     ['occupied', 409, 'CHARACTER_SLOT_OCCUPIED'],
     ['operation_conflict', 409, 'OPERATION_CONFLICT'],
@@ -261,6 +333,30 @@ describe('private character API', () => {
     expect(response.statusCode).toBe(status);
     expect(response.json()).toMatchObject({ error: { code } });
     expect(response.body).not.toMatch(/accountId|SELECT|INSERT|postgres/i);
+  });
+
+  it('does not return a previous receipt after the account becomes restricted', async () => {
+    let restricted = false;
+    const characters: CharacterStore = {
+      getMe: async () => player,
+      create: async () => (restricted ? { kind: 'account_restricted' } : created),
+    };
+    const app = makeApp({ characters });
+    const request = {
+      method: 'POST' as const,
+      url: '/v1/characters',
+      headers,
+      payload: { displayAlias: 'Civilian' },
+    };
+    expect((await app.inject(request)).statusCode).toBe(201);
+    restricted = true;
+    const replay = await app.inject(request);
+    expect(replay.statusCode).toBe(403);
+    expect(replay.json()).toEqual({
+      error: { code: 'ACCOUNT_RESTRICTED', requestId: replay.headers['x-request-id'] },
+    });
+    expect(replay.headers['cache-control']).toBe('no-store');
+    expect(replay.body).not.toMatch(/characterId|operationId|createdAt|moderationReason/);
   });
 
   it('fails closed without configured services and sanitizes store failures', async () => {
