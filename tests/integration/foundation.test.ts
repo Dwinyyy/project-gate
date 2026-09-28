@@ -128,6 +128,33 @@ test('game identities use private tables and safe independent lifecycle defaults
   }
 });
 
+test('account access defaults active, permits owner restriction, and rejects other values', async () => {
+  const accountId = (
+    await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
+  ).rows[0]!.id;
+  try {
+    expect(
+      (await owner.query('SELECT access_state FROM game.accounts WHERE id = $1', [accountId])).rows,
+    ).toEqual([{ access_state: 'active' }]);
+    expect(
+      (
+        await owner.query(
+          "UPDATE game.accounts SET access_state = 'restricted' WHERE id = $1 RETURNING access_state",
+          [accountId],
+        )
+      ).rows,
+    ).toEqual([{ access_state: 'restricted' }]);
+    await expect(
+      owner.query("UPDATE game.accounts SET access_state = 'invalid' WHERE id = $1", [accountId]),
+    ).rejects.toMatchObject({ code: '23514' });
+    expect(
+      (await owner.query('SELECT access_state FROM game.accounts WHERE id = $1', [accountId])).rows,
+    ).toEqual([{ access_state: 'restricted' }]);
+  } finally {
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
 test('a living or incapacitated character occupies the account slot while dead history remains', async () => {
   const accountId = (
     await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
@@ -287,6 +314,14 @@ test('public roles cannot read game identity and runtime cannot change protected
           characters_write: false,
         },
       ]);
+      expect(
+        (
+          await owner.query(
+            "SELECT has_column_privilege($1, 'game.accounts', 'access_state', 'UPDATE') AS allowed",
+            [role],
+          )
+        ).rows[0]?.allowed,
+      ).toBe(false);
       const roleConnection = await owner.connect();
       try {
         await roleConnection.query('BEGIN');
@@ -295,6 +330,15 @@ test('public roles cannot read game identity and runtime cannot change protected
           await expect(roleConnection.query(`SELECT id FROM game.${table}`)).rejects.toMatchObject({
             code: '42501',
           });
+          await roleConnection.query('ROLLBACK');
+          await roleConnection.query('BEGIN');
+          await roleConnection.query(`SET LOCAL ROLE ${role}`);
+        }
+        for (const [sql, id] of [
+          ["UPDATE game.accounts SET access_state = 'restricted' WHERE id = $1", accountId],
+          ["UPDATE game.characters SET life_state = 'dead' WHERE id = $1", characterId],
+        ] as const) {
+          await expect(roleConnection.query(sql, [id])).rejects.toMatchObject({ code: '42501' });
           await roleConnection.query('ROLLBACK');
           await roleConnection.query('BEGIN');
           await roleConnection.query(`SET LOCAL ROLE ${role}`);
@@ -318,6 +362,7 @@ test('public roles cannot read game identity and runtime cannot change protected
         [accountId],
       ],
       ['UPDATE game.accounts SET auth_user_id = $1 WHERE id = $2', [randomUUID(), accountId]],
+      ["UPDATE game.accounts SET access_state = 'restricted' WHERE id = $1", [accountId]],
       ['UPDATE game.accounts SET character_creation_not_before = now() WHERE id = $1', [accountId]],
       ['UPDATE game.characters SET account_id = $1 WHERE id = $2', [randomUUID(), characterId]],
       ["UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [characterId]],
@@ -480,11 +525,14 @@ test('creation runtime has only the required column grants and can acquire both 
     ['game.accounts', 'auth_user_id', 'INSERT', true],
     ['game.accounts', 'character_creation_not_before', 'INSERT', false],
     ['game.accounts', 'auth_user_id', 'UPDATE', false],
+    ['game.accounts', 'access_state', 'UPDATE', false],
     ['game.accounts', 'revision', 'UPDATE', true],
     ['game.characters', 'account_id', 'INSERT', true],
     ['game.characters', 'display_alias', 'INSERT', true],
     ['game.characters', 'life_state', 'INSERT', false],
     ['game.characters', 'life_state', 'UPDATE', false],
+    ['game.characters', 'account_id', 'UPDATE', false],
+    ['game.characters', 'revision', 'UPDATE', true],
     ['game.character_creation_receipts', 'account_id', 'INSERT', true],
     ['game.character_creation_receipts', 'operation_id', 'INSERT', true],
     ['game.character_creation_receipts', 'request_fingerprint', 'INSERT', true],
@@ -511,6 +559,12 @@ test('creation runtime has only the required column grants and can acquire both 
       'INSERT INTO game.accounts(auth_user_id) VALUES (NULL) RETURNING id',
     )
   ).rows[0]!.id;
+  const characterId = (
+    await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Lock target') RETURNING id",
+      [accountId],
+    )
+  ).rows[0]!.id;
   try {
     const client = await database.pool.connect();
     try {
@@ -523,11 +577,19 @@ test('creation runtime has only the required column grants and can acquire both 
         (await client.query('SELECT singleton, characters FROM ops.feature_controls FOR SHARE'))
           .rows,
       ).toEqual([{ singleton: true, characters: false }]);
+      expect(
+        (
+          await client.query('SELECT id FROM game.characters WHERE id = $1 FOR SHARE', [
+            characterId,
+          ])
+        ).rows,
+      ).toEqual([{ id: characterId }]);
       await client.query('ROLLBACK');
     } finally {
       client.release();
     }
   } finally {
+    await owner.query('DELETE FROM game.characters WHERE id = $1', [characterId]);
     await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
   }
   for (const role of ['anon', 'authenticated', 'service_role']) {
@@ -858,6 +920,13 @@ async function kill(child: ChildProcess): Promise<void> {
 }
 
 test('a retry of the canonical migration history changes nothing', async () => {
+  expect(
+    (
+      await owner.query(
+        "SELECT length(sha256) AS checksum_length, applied_by FROM ops.schema_migrations WHERE name = '20260928000100_character_authority.sql'",
+      )
+    ).rows,
+  ).toEqual([{ checksum_length: 64, applied_by: 'postgres' }]);
   await expect(migrate(connectionString)).resolves.toEqual([]);
 });
 
