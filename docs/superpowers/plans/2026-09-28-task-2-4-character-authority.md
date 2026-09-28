@@ -10,7 +10,7 @@
 
 **Spec:** [approved Task 2.4 design](../specs/2026-09-28-operation-specific-character-authority-design.md).
 
-**Status:** Ready for owner review; Task 2.4 product code is not implemented. The specification-only [CI run 36386127400](https://github.com/Dwinyyy/project-gate/actions/runs/36386127400) passed verification, formatting and real PostgreSQL but failed 1/47 browser tests when an existing cross-tab MFA test's `page.evaluate` lost its execution context during navigation. The immediately preceding documentation checkpoint [CI run 36385806367](https://github.com/Dwinyyy/project-gate/actions/runs/36385806367) passed. This is not evidence of a Task 2.4 product regression, and the failing run is not counted as green; Task 4 must diagnose and address the navigation-sensitive test if it recurs before final CI acceptance.
+**Status:** Approved by the owner for subagent-driven execution and completed at code revision `2d54b95461d794d6266e9cf82ff6c51187c5f233`. [ADR 0013](../../adr/0013-character-authority.md) and the [verification record](../../testing/foundation-verification.md) describe the delivered scope and limits. Historical pre-implementation [CI run 36386127400](https://github.com/Dwinyyy/project-gate/actions/runs/36386127400) passed verification, formatting and real PostgreSQL but failed 1/47 browser tests when an existing cross-tab MFA test's `page.evaluate` lost its execution context during navigation. Task 4 repaired that test's navigation-sensitive poll; final-SHA [CI run 36415934669](https://github.com/Dwinyyy/project-gate/actions/runs/36415934669) passed all stages.
 
 ## Global Constraints
 

@@ -1,6 +1,6 @@
 # Task 2.4 — Operation-specific character authority
 
-**Status:** Conversational design approved by the owner on 2026-09-28; written specification awaiting owner review. Task 2.4 is not implemented.
+**Status:** Written specification approved by the owner on 2026-09-28. Task 2.4 was implemented and verified at code revision `2d54b95461d794d6266e9cf82ff6c51187c5f233`; [ADR 0013](../../adr/0013-character-authority.md) and the [verification record](../../testing/foundation-verification.md) describe the completed scope and limits.
 
 ## Intended outcome and scope
 
