@@ -20,3 +20,9 @@
 ## Limits and handoff
 
 The managed `characters` feature control remains off. No character onboarding UI exists until Task 2.5, and no managed Auth credential or character write was used here. API injection used a controlled Auth verifier/store except for the banned-bearer case, which used the real verifier with a controlled provider response. The disposable database tests validate real SQL behavior; a combined hosted Auth/API/DB creation journey remains unavailable at this task checkpoint. Task 4 does not mark Task 2.3 or Phase 2 complete.
+
+## Review repair (2026-09-28)
+
+- Canonicalized schema-validated UUID `Idempotency-Key` values to lowercase before `CharacterStore.create`. Regression uses a store that echoes the passed operation ID; uppercase and lowercase versions both receive the same lowercase UUID, return byte-identical 201 bodies, and pass the focused API test.
+- Rejected U+0000 in `displayAlias` during API pre-validation as `400 INVALID_REQUEST`, before store invocation. Regression case `Civilian\u0000Injected` is included in malformed client claims.
+- Evidence: `pnpm exec vitest run tests/unit/character-api.test.ts` passed 24/24; `pnpm typecheck` passed; focused ESLint passed; focused Prettier check and `git diff --check` passed.
