@@ -69,6 +69,31 @@ function store(me: MeResult = player, creation: CreateCharacterResult = created)
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
 describe('private character API', () => {
+  it.each([123, true, ['A']])(
+    'rejects a non-string raw alias before schema coercion',
+    async (displayAlias) => {
+      let storeCalls = 0;
+      const app = makeApp({
+        characters: {
+          getMe: async () => player,
+          create: async () => {
+            storeCalls += 1;
+            return created;
+          },
+        },
+      });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/characters',
+        headers,
+        payload: { displayAlias, appearance },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'INVALID_REQUEST' } });
+      expect(storeCalls).toBe(0);
+    },
+  );
+
   it('requires the complete appearance and passes the exact creation input', async () => {
     const received: unknown[] = [];
     const app = makeApp({

@@ -162,7 +162,8 @@ export function registerCharacterRoutes(
           body &&
           typeof body === 'object' &&
           !Array.isArray(body) &&
-          (Object.keys(body).some((key) => key !== 'displayAlias' && key !== 'appearance') ||
+          (typeof body.displayAlias !== 'string' ||
+            Object.keys(body).some((key) => key !== 'displayAlias' && key !== 'appearance') ||
             (typeof body.displayAlias === 'string' &&
               (Array.from(body.displayAlias.normalize('NFC').trim()).length > 40 ||
                 /\p{Cc}/u.test(body.displayAlias))) ||
