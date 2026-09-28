@@ -10,7 +10,7 @@
 
 **Spec:** [approved Task 2.3 design](../specs/2026-09-27-transactional-character-creation-design.md).
 
-**Status:** Ready for owner review; Task 2.3 product code has not been implemented.
+**Status:** Approved and executed; Task 2.3 implementation and verification completed on 2026-09-28. This plan preserves its original task checkboxes as an archival implementation guide; see [current evidence](../../testing/foundation-verification.md) and the SDD progress record.
 
 ## Global Constraints
 

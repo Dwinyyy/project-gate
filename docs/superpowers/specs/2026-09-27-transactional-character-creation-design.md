@@ -1,6 +1,6 @@
 # Task 2.3 — Transactional character creation and eligibility
 
-**Status:** Approved by the owner for Task 2.3 implementation, 2026-09-27. No Task 2.3 API or database mutation has been implemented.
+**Status:** Approved by the owner on 2026-09-27; Task 2.3 implementation and verification completed on 2026-09-28. See [current evidence](../../testing/foundation-verification.md).
 
 ## Intended outcome and scope
 

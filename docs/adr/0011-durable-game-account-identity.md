@@ -1,6 +1,6 @@
 # ADR 0011 — Durable game account and character identity
 
-Status: accepted for Task 2.2, 2026-09-27. Character creation and account-link recovery remain future work.
+Status: accepted for Task 2.2, 2026-09-27. Task 2.3 subsequently added transactional character creation and verified login linking; detached-login recovery remains future work.
 
 ## Context
 
