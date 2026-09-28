@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import {
+  appearanceCatalog,
+  appearanceCatalogVersion,
+  type CreateCharacterInput,
+} from '@hunter-world/contracts';
 import { authorizeCharacterOperation } from './character-authority.js';
 import { withTransaction } from './index.js';
 
@@ -10,11 +15,12 @@ export type MeResult =
   | { kind: 'operator_only' | 'auth_ineligible' }
   | {
       kind: 'player';
-      schemaVersion: 2;
+      schemaVersion: 3;
       mode: 'onboarding' | 'active' | 'incapacitated' | 'observer' | 'restricted';
       character: {
         id: string;
         displayAlias: string;
+        appearance: CreateCharacterInput['appearance'];
         lifeState: 'alive' | 'incapacitated';
         awakeningState: 'unawakened' | 'awakened';
         presenceState: 'sheltered' | 'active' | 'committed';
@@ -40,7 +46,8 @@ export type CreateCharacterResult =
         | 'account_restricted'
         | 'disabled'
         | 'occupied'
-        | 'operation_conflict';
+        | 'operation_conflict'
+        | 'invalid_request';
     }
   | { kind: 'cooldown'; notBefore: string };
 
@@ -48,7 +55,7 @@ export interface CharacterStore {
   getMe(authUserId: string): Promise<MeResult>;
   create(
     authUserId: string,
-    displayAlias: string,
+    input: CreateCharacterInput,
     operationId: string,
   ): Promise<CreateCharacterResult>;
 }
@@ -62,6 +69,11 @@ interface AccountRow {
 interface CharacterRow {
   id: string;
   display_alias: string;
+  catalog_version: 1;
+  preset_id: CreateCharacterInput['appearance']['presetId'];
+  skin_tone_id: CreateCharacterInput['appearance']['skinToneId'];
+  hair_style_id: CreateCharacterInput['appearance']['hairStyleId'];
+  hair_color_id: CreateCharacterInput['appearance']['hairColorId'];
   life_state: 'alive' | 'incapacitated';
   awakening_state: 'unawakened' | 'awakened';
   presence_state: 'sheltered' | 'active' | 'committed';
@@ -88,7 +100,8 @@ async function livingCharacter(
 ): Promise<CharacterRow | null> {
   const result = await client.query<CharacterRow>(
     `SELECT id, display_alias, life_state, awakening_state, presence_state,
-            profile_visibility, revision::text AS revision, created_at
+            profile_visibility, revision::text AS revision, created_at,
+            catalog_version, preset_id, skin_tone_id, hair_style_id, hair_color_id
        FROM game.characters
       WHERE account_id = $1::uuid AND life_state IN ('alive', 'incapacitated')`,
     [accountId],
@@ -157,12 +170,19 @@ export function createCharacterStore(pool: Pool): CharacterStore {
                 : 'available';
         return {
           kind: 'player',
-          schemaVersion: 2,
+          schemaVersion: 3,
           mode,
           character: living
             ? {
                 id: living.id,
                 displayAlias: living.display_alias,
+                appearance: {
+                  catalogVersion: living.catalog_version,
+                  presetId: living.preset_id,
+                  skinToneId: living.skin_tone_id,
+                  hairStyleId: living.hair_style_id,
+                  hairColorId: living.hair_color_id,
+                },
                 lifeState: living.life_state,
                 awakeningState: living.awakening_state,
                 presenceState: living.presence_state,
@@ -175,14 +195,53 @@ export function createCharacterStore(pool: Pool): CharacterStore {
         };
       });
     },
-    async create(authUserId, displayAlias, operationId) {
+    async create(authUserId, input, operationId) {
       if (!isUuid(authUserId)) return { kind: 'auth_ineligible' };
       if (!isUuid(operationId)) return { kind: 'operation_conflict' };
+      if (
+        !input ||
+        typeof input.displayAlias !== 'string' ||
+        /\p{Cc}/u.test(input.displayAlias) ||
+        !input.appearance ||
+        typeof input.appearance !== 'object' ||
+        Array.isArray(input.appearance) ||
+        Object.keys(input).some((key) => key !== 'displayAlias' && key !== 'appearance') ||
+        Object.keys(input.appearance).some(
+          (key) =>
+            !['catalogVersion', 'presetId', 'skinToneId', 'hairStyleId', 'hairColorId'].includes(
+              key,
+            ),
+        )
+      )
+        return { kind: 'invalid_request' };
+      const displayAlias = input.displayAlias.normalize('NFC').trim();
       const aliasLength = Array.from(displayAlias).length;
-      if (aliasLength < 1 || aliasLength > 40 || !/\S/u.test(displayAlias)) {
-        return { kind: 'operation_conflict' };
-      }
-      const fingerprint = createHash('sha256').update(displayAlias, 'utf8').digest();
+      const appearance = input.appearance;
+      if (
+        aliasLength < 1 ||
+        aliasLength > 40 ||
+        !/\S/u.test(displayAlias) ||
+        /\p{Cc}/u.test(displayAlias) ||
+        appearance.catalogVersion !== appearanceCatalogVersion ||
+        !appearanceCatalog.presets.some((item) => item.id === appearance.presetId) ||
+        !appearanceCatalog.skinTones.some((item) => item.id === appearance.skinToneId) ||
+        !appearanceCatalog.hairStyles.some((item) => item.id === appearance.hairStyleId) ||
+        !appearanceCatalog.hairColors.some((item) => item.id === appearance.hairColorId)
+      )
+        return { kind: 'invalid_request' };
+      const fingerprint = createHash('sha256')
+        .update(
+          JSON.stringify([
+            displayAlias,
+            appearance.catalogVersion,
+            appearance.presetId,
+            appearance.skinToneId,
+            appearance.hairStyleId,
+            appearance.hairColorId,
+          ]),
+          'utf8',
+        )
+        .digest();
       try {
         return await withTransaction(pool, async (client): Promise<CreateCharacterResult> => {
           const authority = await authorizeCharacterOperation(client, {
@@ -237,8 +296,18 @@ export function createCharacterStore(pool: Pool): CharacterStore {
           }
           if (await livingCharacter(client, accountRow.id)) return { kind: 'occupied' };
           const character = await client.query<{ id: string }>(
-            'INSERT INTO game.characters(account_id, display_alias) VALUES ($1::uuid, $2) RETURNING id',
-            [accountRow.id, displayAlias],
+            `INSERT INTO game.characters(account_id, display_alias, catalog_version, preset_id,
+               skin_tone_id, hair_style_id, hair_color_id)
+             VALUES ($1::uuid, $2, $3, $4, $5, $6, $7) RETURNING id`,
+            [
+              accountRow.id,
+              displayAlias,
+              appearance.catalogVersion,
+              appearance.presetId,
+              appearance.skinToneId,
+              appearance.hairStyleId,
+              appearance.hairColorId,
+            ],
           );
           const inserted = await client.query<ReceiptRow>(
             `INSERT INTO game.character_creation_receipts(account_id, operation_id, request_fingerprint, character_id)

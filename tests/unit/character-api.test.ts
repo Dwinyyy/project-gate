@@ -23,9 +23,16 @@ const identity: AuthIdentity = {
 };
 const apps: FastifyInstance[] = [];
 const headers = { authorization: 'Bearer valid-token', 'idempotency-key': operationId };
+const appearance = {
+  catalogVersion: 1 as const,
+  presetId: 'portrait-02' as const,
+  skinToneId: 'tone-04' as const,
+  hairStyleId: 'coiled' as const,
+  hairColorId: 'auburn' as const,
+};
 const player: MeResult = {
   kind: 'player',
-  schemaVersion: 2,
+  schemaVersion: 3,
   mode: 'onboarding',
   character: null,
   creation: { status: 'feature_disabled', notBefore: null },
@@ -62,11 +69,50 @@ function store(me: MeResult = player, creation: CreateCharacterResult = created)
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
 describe('private character API', () => {
+  it('requires the complete appearance and passes the exact creation input', async () => {
+    const received: unknown[] = [];
+    const app = makeApp({
+      characters: {
+        getMe: async () => player,
+        create: async (_id, input) => {
+          received.push(input);
+          return created;
+        },
+      },
+    });
+    const valid = await app.inject({
+      method: 'POST',
+      url: '/v1/characters',
+      headers,
+      payload: { displayAlias: 'Civilian', appearance },
+    });
+    expect(valid.statusCode).toBe(201);
+    expect(received).toEqual([{ displayAlias: 'Civilian', appearance }]);
+    for (const payload of [
+      { displayAlias: 'Civilian' },
+      { displayAlias: 'Civilian', appearance: { ...appearance, hairColorId: 'unknown' } },
+      {
+        displayAlias: 'Civilian',
+        appearance: { ...appearance, imageUrl: 'https://example.test/a' },
+      },
+    ]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/characters',
+        headers,
+        payload,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'INVALID_REQUEST' } });
+    }
+    expect(received).toHaveLength(1);
+  });
+
   it('returns a private, versioned read with no account for a disabled first login', async () => {
     const response = await makeApp({ characters: store() }).inject({ url: '/v1/me', headers });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: 'onboarding',
       character: null,
       creation: { status: 'feature_disabled', notBefore: null },
@@ -79,11 +125,12 @@ describe('private character API', () => {
     const response = await makeApp({
       characters: store({
         kind: 'player',
-        schemaVersion: 2,
+        schemaVersion: 3,
         mode: 'incapacitated',
         character: {
           id: characterId,
           displayAlias: 'Civilian',
+          appearance,
           lifeState: 'incapacitated',
           awakeningState: 'unawakened',
           presenceState: 'sheltered',
@@ -97,6 +144,7 @@ describe('private character API', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().character).toMatchObject({
       id: characterId,
+      appearance,
       lifeState: 'incapacitated',
       revision: '9007199254740993',
     });
@@ -119,6 +167,7 @@ describe('private character API', () => {
       ? {
           id: characterId,
           displayAlias: 'Civilian',
+          appearance,
           lifeState: life,
           awakeningState: 'unawakened' as const,
           presenceState: 'sheltered' as const,
@@ -133,7 +182,7 @@ describe('private character API', () => {
     const response = await makeApp({
       characters: store({
         kind: 'player',
-        schemaVersion: 2,
+        schemaVersion: 3,
         mode,
         character,
         creation: {
@@ -145,11 +194,12 @@ describe('private character API', () => {
     }).inject({ url: '/v1/me?accountId=foreign&mode=active', headers });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode,
       character: character && {
         id: characterId,
         displayAlias: 'Civilian',
+        appearance,
         lifeState: life,
         awakeningState: 'unawakened',
         presenceState: 'sheltered',
@@ -180,7 +230,7 @@ describe('private character API', () => {
       method: 'POST' as const,
       url: '/v1/characters',
       headers,
-      payload: { displayAlias: 'Civilian' },
+      payload: { displayAlias: 'Civilian', appearance },
     };
     const first = await app.inject(request);
     const replay = await app.inject(request);
@@ -206,7 +256,7 @@ describe('private character API', () => {
     const request = {
       method: 'POST' as const,
       url: '/v1/characters',
-      payload: { displayAlias: 'Civilian' },
+      payload: { displayAlias: 'Civilian', appearance },
     };
     const first = await app.inject({
       ...request,
@@ -242,7 +292,11 @@ describe('private character API', () => {
       const app = makeApp({ verified, characters });
       for (const request of [
         { url: '/v1/me' },
-        { method: 'POST' as const, url: '/v1/characters', payload: { displayAlias: 'Civilian' } },
+        {
+          method: 'POST' as const,
+          url: '/v1/characters',
+          payload: { displayAlias: 'Civilian', appearance },
+        },
       ]) {
         const response = await app.inject({ ...request, headers });
         expect(response.statusCode).toBe(status);
@@ -306,7 +360,11 @@ describe('private character API', () => {
     const app = makeApp({ characters: store({ kind }, { kind }) });
     for (const request of [
       { url: '/v1/me' },
-      { method: 'POST' as const, url: '/v1/characters', payload: { displayAlias: 'Civilian' } },
+      {
+        method: 'POST' as const,
+        url: '/v1/characters',
+        payload: { displayAlias: 'Civilian', appearance },
+      },
     ]) {
       const response = await app.inject({ ...request, headers });
       expect(response.statusCode).toBe(403);
@@ -328,7 +386,7 @@ describe('private character API', () => {
       method: 'POST',
       url: '/v1/characters',
       headers,
-      payload: { displayAlias: 'Civilian' },
+      payload: { displayAlias: 'Civilian', appearance },
     });
     expect(response.statusCode).toBe(status);
     expect(response.json()).toMatchObject({ error: { code } });
@@ -346,7 +404,7 @@ describe('private character API', () => {
       method: 'POST' as const,
       url: '/v1/characters',
       headers,
-      payload: { displayAlias: 'Civilian' },
+      payload: { displayAlias: 'Civilian', appearance },
     };
     expect((await app.inject(request)).statusCode).toBe(201);
     restricted = true;
@@ -368,7 +426,7 @@ describe('private character API', () => {
           method: 'POST',
           url: '/v1/characters',
           headers,
-          payload: { displayAlias: 'Civilian' },
+          payload: { displayAlias: 'Civilian', appearance },
         })
       ).statusCode,
     ).toBe(503);
@@ -384,7 +442,11 @@ describe('private character API', () => {
     });
     for (const request of [
       { url: '/v1/me' },
-      { method: 'POST' as const, url: '/v1/characters', payload: { displayAlias: 'Civilian' } },
+      {
+        method: 'POST' as const,
+        url: '/v1/characters',
+        payload: { displayAlias: 'Civilian', appearance },
+      },
     ]) {
       const response = await failing.inject({ ...request, headers });
       expect(response.statusCode).toBe(503);
@@ -425,13 +487,13 @@ describe('private character API', () => {
       method: 'POST',
       url: '/v1/characters',
       headers,
-      payload: { displayAlias: '😀'.repeat(40) },
+      payload: { displayAlias: '😀'.repeat(40), appearance },
     });
     const fortyOne = await app.inject({
       method: 'POST',
       url: '/v1/characters',
       headers,
-      payload: { displayAlias: '😀'.repeat(41) },
+      payload: { displayAlias: '😀'.repeat(41), appearance },
     });
     expect(forty.statusCode).toBe(201);
     expect(fortyOne.statusCode).toBe(400);

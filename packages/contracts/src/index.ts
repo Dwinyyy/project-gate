@@ -63,4 +63,5 @@ export {
   characterCreationResponseSchema,
   type MeResponse,
   type CharacterCreationResponse,
+  type CreateCharacterInput,
 } from './character.js';

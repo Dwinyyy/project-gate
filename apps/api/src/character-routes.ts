@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  appearanceChoiceSchema,
+  type CreateCharacterInput,
   characterCreationResponseSchema,
   errorResponseSchema,
   meResponseSchema,
@@ -24,8 +26,11 @@ const createRequestSchema = {
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['displayAlias'],
-    properties: { displayAlias: { type: 'string', minLength: 1, maxLength: 40, pattern: '\\S' } },
+    required: ['displayAlias', 'appearance'],
+    properties: {
+      displayAlias: { type: 'string', minLength: 1, pattern: '\\S' },
+      appearance: appearanceChoiceSchema,
+    },
   },
 } as const;
 
@@ -84,6 +89,8 @@ function creationFailure(result: Exclude<CreateCharacterResult, { kind: 'created
       return { status: 409, code: 'CHARACTER_CREATION_COOLDOWN' };
     case 'operation_conflict':
       return { status: 409, code: 'OPERATION_CONFLICT' };
+    case 'invalid_request':
+      return { status: 400, code: 'INVALID_REQUEST' };
   }
 }
 
@@ -121,6 +128,7 @@ export function registerCharacterRoutes(
             ? {
                 id: result.character.id,
                 displayAlias: result.character.displayAlias,
+                appearance: result.character.appearance,
                 lifeState: result.character.lifeState,
                 awakeningState: result.character.awakeningState,
                 presenceState: result.character.presenceState,
@@ -141,23 +149,39 @@ export function registerCharacterRoutes(
     },
   );
 
-  app.post<{ Headers: { 'idempotency-key': string }; Body: { displayAlias: string } }>(
+  app.post<{ Headers: { 'idempotency-key': string }; Body: CreateCharacterInput }>(
     '/v1/characters',
     {
       bodyLimit: 1024,
       config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
-      preValidation: (request, reply, done) => {
+      preValidation: async (request, reply) => {
         const body = request.body;
+        const appearance =
+          body && typeof body === 'object' && !Array.isArray(body) ? body.appearance : null;
         if (
           body &&
           typeof body === 'object' &&
           !Array.isArray(body) &&
-          (Object.keys(body).some((key) => key !== 'displayAlias') ||
-            (typeof body.displayAlias === 'string' && body.displayAlias.includes('\u0000')))
+          (Object.keys(body).some((key) => key !== 'displayAlias' && key !== 'appearance') ||
+            (typeof body.displayAlias === 'string' &&
+              (Array.from(body.displayAlias.normalize('NFC').trim()).length > 40 ||
+                /\p{Cc}/u.test(body.displayAlias))) ||
+            (appearance &&
+              typeof appearance === 'object' &&
+              !Array.isArray(appearance) &&
+              Object.keys(appearance).some(
+                (key) =>
+                  ![
+                    'catalogVersion',
+                    'presetId',
+                    'skinToneId',
+                    'hairStyleId',
+                    'hairColorId',
+                  ].includes(key),
+              )))
         ) {
-          failure(reply, request, 400, 'INVALID_REQUEST');
+          return failure(reply, request, 400, 'INVALID_REQUEST');
         }
-        done();
       },
       schema: {
         ...createRequestSchema,
@@ -176,7 +200,7 @@ export function registerCharacterRoutes(
       try {
         const result = await options.characters!.create(
           authUserId,
-          request.body.displayAlias,
+          request.body,
           request.headers['idempotency-key'].toLowerCase(),
         );
         if (result.kind === 'created') {

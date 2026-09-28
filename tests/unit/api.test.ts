@@ -73,7 +73,16 @@ describe('foundation API trust boundaries', () => {
           method: 'POST',
           url: '/v1/characters',
           headers: { 'idempotency-key': '33333333-3333-4333-8333-333333333333' },
-          payload: { displayAlias: 'Civilian' },
+          payload: {
+            displayAlias: 'Civilian',
+            appearance: {
+              catalogVersion: 1,
+              presetId: 'portrait-01',
+              skinToneId: 'tone-03',
+              hairStyleId: 'cropped',
+              hairColorId: 'black',
+            },
+          },
         })
       ).statusCode,
     ).toBe(503);

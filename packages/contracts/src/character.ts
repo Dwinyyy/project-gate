@@ -1,11 +1,14 @@
 import type { FromSchema } from 'json-schema-to-ts';
+import { appearanceChoiceSchema, type AppearanceChoice } from './appearance.js';
+
+export type CreateCharacterInput = { displayAlias: string; appearance: AppearanceChoice };
 
 export const meResponseSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['schemaVersion', 'mode', 'character', 'creation'],
   properties: {
-    schemaVersion: { const: 2 },
+    schemaVersion: { const: 3 },
     mode: { enum: ['onboarding', 'active', 'incapacitated', 'observer', 'restricted'] },
     character: {
       anyOf: [
@@ -16,6 +19,7 @@ export const meResponseSchema = {
           required: [
             'id',
             'displayAlias',
+            'appearance',
             'lifeState',
             'awakeningState',
             'presenceState',
@@ -26,6 +30,7 @@ export const meResponseSchema = {
           properties: {
             id: { type: 'string', format: 'uuid' },
             displayAlias: { type: 'string' },
+            appearance: appearanceChoiceSchema,
             lifeState: { enum: ['alive', 'incapacitated'] },
             awakeningState: { enum: ['unawakened', 'awakened'] },
             presenceState: { enum: ['sheltered', 'active', 'committed'] },

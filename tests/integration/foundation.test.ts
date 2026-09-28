@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { Pool } from 'pg';
 import { migrate } from '../../scripts/migrate.js';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFile, fork, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -1237,6 +1237,14 @@ async function verifiedOperatorCandidate(withMfa = true): Promise<string> {
 }
 
 const characterStore = createCharacterStore(database.pool);
+const testAppearance = {
+  catalogVersion: 1 as const,
+  presetId: 'portrait-02' as const,
+  skinToneId: 'tone-04' as const,
+  hairStyleId: 'coiled' as const,
+  hairColorId: 'auburn' as const,
+};
+const creationInput = (displayAlias: string) => ({ displayAlias, appearance: testAppearance });
 
 async function characterCandidate(
   email = `${randomUUID()}@example.test`,
@@ -1290,7 +1298,9 @@ test('ordinary verified account remains unavailable while the global switch is o
     expect(await characterStore.getMe(id)).toMatchObject({
       creation: { status: 'feature_disabled', notBefore: null },
     });
-    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({ kind: 'disabled' });
+    expect(await characterStore.create(id, creationInput('Civilian'), randomUUID())).toEqual({
+      kind: 'disabled',
+    });
     expect(
       (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
     ).toBe(0);
@@ -1302,7 +1312,7 @@ test('ordinary verified account remains unavailable while the global switch is o
       mode: 'restricted',
       creation: { status: 'restricted' },
     });
-    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({
+    expect(await characterStore.create(id, creationInput('Civilian'), randomUUID())).toEqual({
       kind: 'account_restricted',
     });
   } finally {
@@ -1317,12 +1327,17 @@ test('revoked pilot cannot replay a committed creation receipt', async () => {
   const key = randomUUID();
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
-    const first = await characterStore.create(id, 'Civilian', key);
+    const first = await characterStore.create(id, creationInput('Civilian'), key);
     expect(first).toMatchObject({ kind: 'created', replayed: false });
     await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
-    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ ...first, replayed: true });
+    expect(await characterStore.create(id, creationInput('Civilian'), key)).toEqual({
+      ...first,
+      replayed: true,
+    });
     await setPilotStatus(email, false);
-    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'disabled' });
+    expect(await characterStore.create(id, creationInput('Civilian'), key)).toEqual({
+      kind: 'disabled',
+    });
     expect(await characterStore.getMe(id)).toMatchObject({
       creation: { status: 'feature_disabled' },
     });
@@ -1410,7 +1425,7 @@ test('pilot revocation committed first denies a waiting creation', async () => {
       'Pilot revoked during creation',
       randomUUID(),
     ]);
-    pending = characterStore.create(id, 'Civilian', randomUUID());
+    pending = characterStore.create(id, creationInput('Civilian'), randomUUID());
     void pending.catch(() => undefined);
     const createPid = await blockedAuthorityPid('operator-account:');
     expect(createPid).not.toBe(statePid);
@@ -1462,7 +1477,7 @@ test('creation committed first persists before a waiting pilot revocation', asyn
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     await blocker.query('BEGIN');
     await blocker.query('SELECT id FROM game.accounts WHERE id = $1 FOR UPDATE', [accountId]);
-    pending = characterStore.create(id, 'Civilian', randomUUID());
+    pending = characterStore.create(id, creationInput('Civilian'), randomUUID());
     void pending.catch(() => undefined);
     const createPid = await blockedAuthorityPid('FROM game.accounts WHERE auth_user_id');
     expect(createPid).not.toBe(blockerPid);
@@ -1496,7 +1511,9 @@ test('creation committed first persists before a waiting pilot revocation', asyn
         )
       ).rows[0]?.count,
     ).toBe(1);
-    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({ kind: 'disabled' });
+    expect(await characterStore.create(id, creationInput('Civilian'), randomUUID())).toEqual({
+      kind: 'disabled',
+    });
   } finally {
     await blocker.query('ROLLBACK');
     blocker.release();
@@ -1871,7 +1888,7 @@ test('character eligibility reads no account and respects feature state without 
   try {
     expect(await characterStore.getMe(id)).toMatchObject({
       kind: 'player',
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: 'onboarding',
       character: null,
       creation: { status: 'feature_disabled', notBefore: null },
@@ -1881,7 +1898,7 @@ test('character eligibility reads no account and respects feature state without 
     ).toBe(0);
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     expect(await characterStore.getMe(id)).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: 'onboarding',
       character: null,
       creation: { status: 'available', notBefore: null },
@@ -1899,14 +1916,14 @@ test('private character mode follows living state and dead history without expos
   const id = await characterCandidate();
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
-    const first = await characterStore.create(id, 'First life', randomUUID());
+    const first = await characterStore.create(id, creationInput('First life'), randomUUID());
     expect(first.kind).toBe('created');
     if (first.kind !== 'created') return;
     await owner.query('UPDATE game.characters SET revision = 9007199254740993 WHERE id = $1', [
       first.characterId,
     ]);
     expect(await characterStore.getMe(id)).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: 'active',
       character: { id: first.characterId, lifeState: 'alive', revision: '9007199254740993' },
       creation: { status: 'occupied' },
@@ -1937,7 +1954,7 @@ test('private character mode follows living state and dead history without expos
     );
     expect(await characterStore.getMe(id)).toEqual({
       kind: 'player',
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: 'observer',
       character: null,
       creation: { status: 'available', notBefore: null },
@@ -1973,7 +1990,7 @@ test('stored cooldown alone keeps an account in observer mode after expiry', asy
     );
     expect(await characterStore.getMe(id)).toEqual({
       kind: 'player',
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: 'observer',
       character: null,
       creation: { status: 'available', notBefore: null },
@@ -1990,9 +2007,15 @@ test('game restriction takes precedence over living state, flag, and creation re
   const operationId = randomUUID();
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
-    const first = await characterStore.create(livingId, 'Private civilian', operationId);
+    const first = await characterStore.create(
+      livingId,
+      creationInput('Private civilian'),
+      operationId,
+    );
     expect(first).toMatchObject({ kind: 'created', replayed: false });
-    expect(await characterStore.create(livingId, 'Private civilian', operationId)).toMatchObject({
+    expect(
+      await characterStore.create(livingId, creationInput('Private civilian'), operationId),
+    ).toMatchObject({
       kind: 'created',
       replayed: true,
     });
@@ -2011,28 +2034,34 @@ test('game restriction takes precedence over living state, flag, and creation re
         enabled,
       ]);
       expect(await characterStore.getMe(livingId)).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         mode: 'restricted',
         character: { id: first.kind === 'created' ? first.characterId : '' },
         creation: { status: 'restricted', notBefore: null },
       });
       expect(await characterStore.getMe(observerId)).toEqual({
         kind: 'player',
-        schemaVersion: 2,
+        schemaVersion: 3,
         mode: 'restricted',
         character: null,
         creation: { status: 'restricted', notBefore: null },
       });
-      expect(await characterStore.create(livingId, 'Private civilian', operationId)).toEqual({
+      expect(
+        await characterStore.create(livingId, creationInput('Private civilian'), operationId),
+      ).toEqual({
         kind: 'account_restricted',
       });
-      expect(await characterStore.create(livingId, 'Changed', operationId)).toEqual({
+      expect(await characterStore.create(livingId, creationInput('Changed'), operationId)).toEqual({
         kind: 'account_restricted',
       });
-      expect(await characterStore.create(livingId, 'Private civilian', randomUUID())).toEqual({
+      expect(
+        await characterStore.create(livingId, creationInput('Private civilian'), randomUUID()),
+      ).toEqual({
         kind: 'account_restricted',
       });
-      expect(await characterStore.create(observerId, 'New civilian', randomUUID())).toEqual({
+      expect(
+        await characterStore.create(observerId, creationInput('New civilian'), randomUUID()),
+      ).toEqual({
         kind: 'account_restricted',
       });
     }
@@ -2086,7 +2115,7 @@ test('restriction committed while creation waits leaves no character or receipt'
     await state.query("UPDATE game.accounts SET access_state = 'restricted' WHERE id = $1", [
       accountId,
     ]);
-    createRequest = characterStore.create(id, 'Race civilian', randomUUID());
+    createRequest = characterStore.create(id, creationInput('Race civilian'), randomUUID());
     void createRequest.catch(() => undefined);
     await expect
       .poll(
@@ -2141,7 +2170,7 @@ test('character creation links a verified UUID once and replays the same receipt
   const operationId = randomUUID();
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
-    const first = await characterStore.create(id, 'Civilian', operationId);
+    const first = await characterStore.create(id, creationInput('Civilian'), operationId);
     expect(first).toMatchObject({ kind: 'created', operationId, replayed: false });
     expect(await characterStore.getMe(id)).toMatchObject({
       creation: { status: 'occupied' },
@@ -2155,11 +2184,11 @@ test('character creation links a verified UUID once and replays the same receipt
       },
     });
     await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
-    expect(await characterStore.create(id, 'Civilian', operationId)).toEqual({
+    expect(await characterStore.create(id, creationInput('Civilian'), operationId)).toEqual({
       ...first,
       replayed: true,
     });
-    expect(await characterStore.create(id, 'Changed', operationId)).toEqual({
+    expect(await characterStore.create(id, creationInput('Changed'), operationId)).toEqual({
       kind: 'operation_conflict',
     });
     expect(await characterStore.getMe(id)).toMatchObject({
@@ -2180,6 +2209,144 @@ test('character creation links a verified UUID once and replays the same receipt
   }
 });
 
+test('creation stores exact appearance atomically and replays normalized alias only', async () => {
+  const id = await characterCandidate();
+  const key = randomUUID();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const first = await characterStore.create(id, creationInput('  Cafe\u0301  '), key);
+    expect(first).toMatchObject({ kind: 'created', replayed: false });
+    if (first.kind !== 'created') return;
+    expect(
+      (
+        await owner.query(
+          `SELECT display_alias, catalog_version, preset_id, skin_tone_id, hair_style_id, hair_color_id
+         FROM game.characters WHERE id = $1`,
+          [first.characterId],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        display_alias: 'Café',
+        catalog_version: 1,
+        preset_id: 'portrait-02',
+        skin_tone_id: 'tone-04',
+        hair_style_id: 'coiled',
+        hair_color_id: 'auburn',
+      },
+    ]);
+    expect(await characterStore.create(id, creationInput('Café'), key)).toEqual({
+      ...first,
+      replayed: true,
+    });
+    expect(
+      await characterStore.create(
+        id,
+        {
+          displayAlias: 'Café',
+          appearance: {
+            ...testAppearance,
+            hairColorId: 'black',
+          },
+        },
+        key,
+      ),
+    ).toEqual({ kind: 'operation_conflict' });
+    expect(await characterStore.getMe(id)).toMatchObject({
+      schemaVersion: 3,
+      character: { displayAlias: 'Café', appearance: testAppearance },
+    });
+    expect(
+      (await owner.query('SELECT count(*)::int AS count FROM game.character_creation_receipts'))
+        .rows,
+    ).toEqual([{ count: 1 }]);
+    const receipt = await owner.query<{ request_fingerprint: Buffer }>(
+      'SELECT request_fingerprint FROM game.character_creation_receipts WHERE operation_id = $1',
+      [key],
+    );
+    expect(receipt.rows[0]?.request_fingerprint).toEqual(
+      createHash('sha256')
+        .update(JSON.stringify(['Café', 1, 'portrait-02', 'tone-04', 'coiled', 'auburn']))
+        .digest(),
+    );
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('service rejects unsupported appearance and control aliases without inserting account or receipt', async () => {
+  const id = await characterCandidate();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    for (const input of [
+      { displayAlias: 'Civilian', appearance: { ...testAppearance, hairStyleId: 'unknown' } },
+      { displayAlias: 'Civilian\u0007', appearance: testAppearance },
+      { displayAlias: '\nCivilian', appearance: testAppearance },
+      { displayAlias: '   ', appearance: testAppearance },
+    ]) {
+      expect(
+        await characterStore.create(
+          id,
+          input as Parameters<typeof characterStore.create>[1],
+          randomUUID(),
+        ),
+      ).toEqual({ kind: 'invalid_request' });
+    }
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+    expect(
+      (await owner.query('SELECT count(*)::int AS count FROM game.character_creation_receipts'))
+        .rows,
+    ).toEqual([{ count: 0 }]);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('legacy character defaults are projected privately in v3', async () => {
+  const id = await characterCandidate();
+  try {
+    const account = await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+      [id],
+    );
+    await owner.query(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Legacy')",
+      [account.rows[0]!.id],
+    );
+    expect(await characterStore.getMe(id)).toMatchObject({
+      schemaVersion: 3,
+      character: {
+        displayAlias: 'Legacy',
+        appearance: {
+          catalogVersion: 1,
+          presetId: 'portrait-01',
+          skinToneId: 'tone-03',
+          hairStyleId: 'cropped',
+          hairColorId: 'black',
+        },
+      },
+    });
+  } finally {
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('runtime may insert each constrained appearance column', async () => {
+  const result = await owner.query<{ column_name: string; allowed: boolean }>(
+    `SELECT column_name,
+            has_column_privilege('hunter_runtime', 'game.characters', column_name, 'INSERT') AS allowed
+       FROM information_schema.columns
+      WHERE table_schema = 'game' AND table_name = 'characters'
+        AND column_name IN ('catalog_version', 'preset_id', 'skin_tone_id', 'hair_style_id', 'hair_color_id')`,
+  );
+  expect(result.rows).toHaveLength(5);
+  expect(result.rows.every((row) => row.allowed)).toBe(true);
+});
+
 test('alias bounds count Unicode characters as PostgreSQL does', async () => {
   const acceptedId = await characterCandidate();
   const rejectedId = await characterCandidate();
@@ -2189,7 +2356,9 @@ test('alias bounds count Unicode characters as PostgreSQL does', async () => {
     const encoding = (await owner.query<{ server_encoding: string }>('SHOW server_encoding'))
       .rows[0]!.server_encoding;
     if (encoding === 'UTF8') {
-      expect(await characterStore.create(acceptedId, fortyCharacters, randomUUID())).toMatchObject({
+      expect(
+        await characterStore.create(acceptedId, creationInput(fortyCharacters), randomUUID()),
+      ).toMatchObject({
         kind: 'created',
       });
       expect(await characterStore.getMe(acceptedId)).toMatchObject({
@@ -2199,11 +2368,13 @@ test('alias bounds count Unicode characters as PostgreSQL does', async () => {
       // Windows embedded PostgreSQL uses WIN1252: reaching its encoding error
       // proves the service did not reject a 40-codepoint alias as too long.
       await expect(
-        characterStore.create(acceptedId, fortyCharacters, randomUUID()),
+        characterStore.create(acceptedId, creationInput(fortyCharacters), randomUUID()),
       ).rejects.toMatchObject({ code: '22P05' });
     }
-    expect(await characterStore.create(rejectedId, `${fortyCharacters}😀`, randomUUID())).toEqual({
-      kind: 'operation_conflict',
+    expect(
+      await characterStore.create(rejectedId, creationInput(`${fortyCharacters}😀`), randomUUID()),
+    ).toEqual({
+      kind: 'invalid_request',
     });
     expect(
       (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [rejectedId]))
@@ -2224,7 +2395,7 @@ test('active and suspended operators cannot read or create player identity', asy
       [id],
     );
     expect(await characterStore.getMe(id)).toEqual({ kind: 'operator_only' });
-    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({
+    expect(await characterStore.create(id, creationInput('Civilian'), randomUUID())).toEqual({
       kind: 'operator_only',
     });
     await owner.query(
@@ -2232,7 +2403,7 @@ test('active and suspended operators cannot read or create player identity', asy
       [id],
     );
     expect(await characterStore.getMe(id)).toEqual({ kind: 'operator_only' });
-    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({
+    expect(await characterStore.create(id, creationInput('Civilian'), randomUUID())).toEqual({
       kind: 'operator_only',
     });
     expect(
@@ -2297,8 +2468,8 @@ async function raceBlockedCharacterCreates(
       [authUserId],
     );
     requests = [
-      characterStore.create(authUserId, alias, operationIds[0]),
-      characterStore.create(authUserId, alias, operationIds[1]),
+      characterStore.create(authUserId, creationInput(alias), operationIds[0]),
+      characterStore.create(authUserId, creationInput(alias), operationIds[1]),
     ];
     const backendPids = await waitForBlockedRuntimeCreates();
     expect(new Set(backendPids).size).toBe(2);
@@ -2339,17 +2510,25 @@ test('unverified, banned, and missing Auth identities cannot gain or replay a re
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     expect(await characterStore.getMe(id)).toEqual({ kind: 'auth_ineligible' });
-    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'auth_ineligible' });
+    expect(await characterStore.create(id, creationInput('Civilian'), key)).toEqual({
+      kind: 'auth_ineligible',
+    });
     await owner.query('UPDATE auth.users SET email_confirmed_at = now() WHERE id = $1', [id]);
     await setPilotStatus(`${id}@example.test`, true);
-    expect(await characterStore.create(id, 'Civilian', key)).toMatchObject({ kind: 'created' });
+    expect(await characterStore.create(id, creationInput('Civilian'), key)).toMatchObject({
+      kind: 'created',
+    });
     await owner.query(
       "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
       [id],
     );
     expect(await characterStore.getMe(id)).toEqual({ kind: 'auth_ineligible' });
-    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'auth_ineligible' });
-    expect(await characterStore.create(randomUUID(), 'Civilian', randomUUID())).toEqual({
+    expect(await characterStore.create(id, creationInput('Civilian'), key)).toEqual({
+      kind: 'auth_ineligible',
+    });
+    expect(
+      await characterStore.create(randomUUID(), creationInput('Civilian'), randomUUID()),
+    ).toEqual({
       kind: 'auth_ineligible',
     });
   } finally {
@@ -2362,7 +2541,7 @@ test('incapacitation occupies the slot; dead history stays private through coold
   const id = await characterCandidate();
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
-    const first = await characterStore.create(id, 'First', randomUUID());
+    const first = await characterStore.create(id, creationInput('First'), randomUUID());
     expect(first.kind).toBe('created');
     if (first.kind !== 'created') return;
     await owner.query("UPDATE game.characters SET life_state = 'incapacitated' WHERE id = $1", [
@@ -2372,7 +2551,9 @@ test('incapacitation occupies the slot; dead history stays private through coold
       character: { id: first.characterId, lifeState: 'incapacitated' },
       creation: { status: 'occupied' },
     });
-    expect(await characterStore.create(id, 'Second', randomUUID())).toEqual({ kind: 'occupied' });
+    expect(await characterStore.create(id, creationInput('Second'), randomUUID())).toEqual({
+      kind: 'occupied',
+    });
     await owner.query("UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [
       first.characterId,
     ]);
@@ -2382,7 +2563,7 @@ test('incapacitation occupies the slot; dead history stays private through coold
     );
     const me = await characterStore.getMe(id);
     expect(me).toMatchObject({ character: null, creation: { status: 'cooldown' } });
-    expect(await characterStore.create(id, 'Second', randomUUID())).toMatchObject({
+    expect(await characterStore.create(id, creationInput('Second'), randomUUID())).toMatchObject({
       kind: 'cooldown',
     });
     await owner.query(
@@ -2390,7 +2571,7 @@ test('incapacitation occupies the slot; dead history stays private through coold
       [id],
     );
     expect(await characterStore.getMe(id)).toMatchObject({ creation: { status: 'available' } });
-    const second = await characterStore.create(id, 'Second', randomUUID());
+    const second = await characterStore.create(id, creationInput('Second'), randomUUID());
     expect(second).toMatchObject({ kind: 'created', replayed: false });
     expect(
       (
@@ -2416,7 +2597,7 @@ test('a new Auth UUID with the same email never inherits detached character hist
   let oldAccountId: string | null = null;
   try {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
-    const old = await characterStore.create(oldId, 'Old life', randomUUID());
+    const old = await characterStore.create(oldId, creationInput('Old life'), randomUUID());
     expect(old.kind).toBe('created');
     oldAccountId = (
       await owner.query<{ id: string }>('SELECT id FROM game.accounts WHERE auth_user_id = $1', [
@@ -2429,7 +2610,7 @@ test('a new Auth UUID with the same email never inherits detached character hist
       character: null,
       creation: { status: 'available' },
     });
-    const fresh = await characterStore.create(newId, 'New life', randomUUID());
+    const fresh = await characterStore.create(newId, creationInput('New life'), randomUUID());
     expect(fresh).toMatchObject({ kind: 'created' });
     expect(
       (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [newId])).rows[0]
@@ -2462,9 +2643,9 @@ test('failed receipt insertion rolls back first link and character', async () =>
     await owner.query(
       'CREATE TRIGGER reject_test_receipt BEFORE INSERT ON game.character_creation_receipts FOR EACH ROW EXECUTE FUNCTION game.reject_test_receipt()',
     );
-    await expect(characterStore.create(id, 'Civilian', randomUUID())).rejects.toThrow(
-      'receipt rejected',
-    );
+    await expect(
+      characterStore.create(id, creationInput('Civilian'), randomUUID()),
+    ).rejects.toThrow('receipt rejected');
     expect(
       (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
     ).toBe(0);
@@ -2509,7 +2690,7 @@ test('audited operator assignment ordered first denies a waiting creation', asyn
       [id],
     );
     await blocker.query(prepareOperatorStatusChange(operatorRequest(id)));
-    const create = characterStore.create(id, 'Civilian', randomUUID());
+    const create = characterStore.create(id, creationInput('Civilian'), randomUUID());
     await waitForBlockedQuery('operator-account:');
     await blocker.query('COMMIT');
     expect(await create).toEqual({ kind: 'operator_only' });
@@ -2531,7 +2712,7 @@ test('creation ordered first commits before audited operator assignment', async 
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     await blocker.query('BEGIN');
     await blocker.query('SELECT singleton FROM ops.feature_controls WHERE singleton FOR UPDATE');
-    const create = characterStore.create(id, 'Civilian', randomUUID());
+    const create = characterStore.create(id, creationInput('Civilian'), randomUUID());
     await waitForBlockedQuery('FROM ops.feature_controls WHERE singleton FOR SHARE');
     const assignment = owner.query(prepareOperatorStatusChange(operatorRequest(id)));
     void assignment.catch(() => undefined);
@@ -2540,7 +2721,7 @@ test('creation ordered first commits before audited operator assignment', async 
     expect(await create).toMatchObject({ kind: 'created' });
     await assignment;
     expect(await characterStore.getMe(id)).toEqual({ kind: 'operator_only' });
-    expect(await characterStore.create(id, 'Another', randomUUID())).toEqual({
+    expect(await characterStore.create(id, creationInput('Another'), randomUUID())).toEqual({
       kind: 'operator_only',
     });
     expect(
@@ -2566,7 +2747,7 @@ test('feature disable ordered first denies a waiting creation', async () => {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     await blocker.query('BEGIN');
     await blocker.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
-    const create = characterStore.create(id, 'Civilian', randomUUID());
+    const create = characterStore.create(id, creationInput('Civilian'), randomUUID());
     await waitForBlockedQuery('FROM ops.feature_controls WHERE singleton FOR SHARE');
     await blocker.query('COMMIT');
     expect(await create).toEqual({ kind: 'disabled' });
@@ -2588,7 +2769,7 @@ test('creation ordered first commits before feature disable', async () => {
     await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
     await blocker.query('BEGIN');
     await blocker.query('UPDATE auth.users SET banned_until = NULL WHERE id = $1', [id]);
-    const create = characterStore.create(id, 'Civilian', randomUUID());
+    const create = characterStore.create(id, creationInput('Civilian'), randomUUID());
     await waitForBlockedQuery('lock_eligible_auth_user');
     const disable = owner.query(
       'UPDATE ops.feature_controls SET characters = false WHERE singleton',
@@ -2618,7 +2799,7 @@ test('provider ban ordered first denies a waiting creation', async () => {
       "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
       [id],
     );
-    const create = characterStore.create(id, 'Civilian', randomUUID());
+    const create = characterStore.create(id, creationInput('Civilian'), randomUUID());
     await waitForBlockedQuery('lock_eligible_auth_user');
     await blocker.query('COMMIT');
     expect(await create).toEqual({ kind: 'auth_ineligible' });
@@ -2641,7 +2822,7 @@ test('creation ordered first commits before provider ban', async () => {
     await owner.query('INSERT INTO game.accounts(auth_user_id) VALUES ($1)', [id]);
     await blocker.query('BEGIN');
     await blocker.query('SELECT id FROM game.accounts WHERE auth_user_id = $1 FOR UPDATE', [id]);
-    const create = characterStore.create(id, 'Civilian', randomUUID());
+    const create = characterStore.create(id, creationInput('Civilian'), randomUUID());
     await waitForBlockedQuery('FROM game.accounts WHERE auth_user_id =');
     const ban = owner.query(
       "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",
