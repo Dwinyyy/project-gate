@@ -114,6 +114,11 @@ export function createCharacterStore(pool: Pool): CharacterStore {
           'SELECT characters FROM ops.feature_controls WHERE singleton',
         );
         if (!controls.rows[0]) throw new Error('Feature controls are missing');
+        const pilot = await client.query<{ enabled: boolean }>(
+          'SELECT enabled FROM ops.character_pilot_access WHERE auth_user_id = $1::uuid',
+          [authUserId],
+        );
+        const creationEnabled = controls.rows[0].characters && pilot.rows[0]?.enabled === true;
         const account = await client.query<AccountRow>(
           'SELECT id, character_creation_not_before, access_state FROM game.accounts WHERE id = $1::uuid',
           [authority.accountId],
@@ -143,7 +148,7 @@ export function createCharacterStore(pool: Pool): CharacterStore {
               : 'onboarding';
         const status: CreationStatus = restricted
           ? 'restricted'
-          : !controls.rows[0].characters
+          : !creationEnabled
             ? 'feature_disabled'
             : living
               ? 'occupied'
@@ -187,6 +192,7 @@ export function createCharacterStore(pool: Pool): CharacterStore {
           if (authority.kind === 'denied') {
             if (authority.reason === 'operator_only') return { kind: 'operator_only' };
             if (authority.reason === 'account_restricted') return { kind: 'account_restricted' };
+            if (authority.reason === 'pilot_unavailable') return { kind: 'disabled' };
             return { kind: 'auth_ineligible' };
           }
           if (!authority.accountId) {

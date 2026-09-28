@@ -40,13 +40,17 @@ runtimeUrl.username = 'hunter_runtime';
 runtimeUrl.password = randomBytes(24).toString('hex');
 const database = createDatabase({ connectionString: runtimeUrl.toString() });
 
-test('queue helper functions have a pinned trusted search path', async () => {
+test('operational functions have pinned trusted search paths', async () => {
   const functions = await owner.query<{ proname: string; proconfig: string[] | null }>(
     "SELECT proname, proconfig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'ops'",
   );
   expect(functions.rows.length).toBeGreaterThanOrEqual(5);
   for (const fn of functions.rows)
-    expect(fn.proconfig, fn.proname).toContain('search_path=pg_catalog, ops');
+    expect(fn.proconfig, fn.proname).toContain(
+      fn.proname === 'lock_character_pilot_access'
+        ? 'search_path=pg_catalog, pg_temp'
+        : 'search_path=pg_catalog, ops',
+    );
 });
 beforeAll(async () => {
   await owner.query(
@@ -215,7 +219,7 @@ test('rejects_unknown_appearance_ids', async () => {
 
 test('owner_pilot_grant_and_revoke_are_audited_and_idempotent', async () => {
   const email = `${randomUUID()}@example.test`;
-  const id = await characterCandidate(email);
+  const id = await characterCandidate(email, false);
   const request = randomUUID();
   const query = 'SELECT ops.set_character_pilot_status_by_email($1, $2, $3, $4, $5) AS receipt';
   try {
@@ -283,12 +287,32 @@ test('owner_pilot_grant_and_revoke_are_audited_and_idempotent', async () => {
 
 test('runtime_and_public_roles_cannot_change_pilot_access', async () => {
   const email = `${randomUUID()}@example.test`;
-  const id = await characterCandidate(email);
+  const id = await characterCandidate(email, false);
   try {
+    expect(
+      (
+        await owner.query(
+          `SELECT function_owner.rolname AS function_owner, table_owner.rolname AS table_owner,
+                  procedure.prosecdef AS security_definer, procedure.provolatile AS volatility
+             FROM pg_proc procedure
+             JOIN pg_roles function_owner ON function_owner.oid = procedure.proowner
+             JOIN pg_class pilot_table ON pilot_table.oid = 'ops.character_pilot_access'::regclass
+             JOIN pg_roles table_owner ON table_owner.oid = pilot_table.relowner
+            WHERE procedure.oid = 'ops.lock_character_pilot_access(uuid)'::regprocedure`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        function_owner: 'postgres',
+        table_owner: 'postgres',
+        security_definer: true,
+        volatility: 'v',
+      },
+    ]);
     for (const role of ['hunter_runtime', 'anon', 'authenticated', 'service_role']) {
       const grants = (
         await owner.query(
-          `SELECT has_column_privilege($1, 'ops.character_pilot_access', 'auth_user_id', 'SELECT') AS read_id, has_column_privilege($1, 'ops.character_pilot_access', 'enabled', 'SELECT') AS read_enabled, has_column_privilege($1, 'ops.character_pilot_access', 'updated_at', 'SELECT') AS read_updated_at, has_table_privilege($1, 'ops.character_pilot_access', 'INSERT,UPDATE,DELETE') AS write, has_table_privilege($1, 'ops.character_pilot_changes', 'INSERT,UPDATE,DELETE') AS audit_write, has_function_privilege($1, 'ops.set_character_pilot_status_by_email(text,boolean,text,text,uuid)', 'EXECUTE') AS execute`,
+          `SELECT has_column_privilege($1, 'ops.character_pilot_access', 'auth_user_id', 'SELECT') AS read_id, has_column_privilege($1, 'ops.character_pilot_access', 'enabled', 'SELECT') AS read_enabled, has_column_privilege($1, 'ops.character_pilot_access', 'updated_at', 'SELECT') AS read_updated_at, has_table_privilege($1, 'ops.character_pilot_access', 'INSERT,UPDATE,DELETE') AS write, has_table_privilege($1, 'ops.character_pilot_changes', 'INSERT,UPDATE,DELETE') AS audit_write, has_function_privilege($1, 'ops.set_character_pilot_status_by_email(text,boolean,text,text,uuid)', 'EXECUTE') AS execute, has_function_privilege($1, 'ops.lock_character_pilot_access(uuid)', 'EXECUTE') AS lock_execute`,
           [role],
         )
       ).rows[0];
@@ -299,8 +323,28 @@ test('runtime_and_public_roles_cannot_change_pilot_access', async () => {
         write: false,
         audit_write: false,
         execute: false,
+        lock_execute: role === 'hunter_runtime',
       });
     }
+    expect(
+      (
+        await database.pool.query('SELECT ops.lock_character_pilot_access($1::uuid) AS enabled', [
+          id,
+        ])
+      ).rows,
+    ).toEqual([{ enabled: false }]);
+    await expect(
+      database.pool.query(
+        'SELECT enabled FROM ops.character_pilot_access WHERE auth_user_id = $1::uuid FOR SHARE',
+        [id],
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      database.pool.query(
+        'UPDATE ops.character_pilot_access SET enabled = false WHERE auth_user_id = $1::uuid',
+        [id],
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
     await owner.query(
       "INSERT INTO ops.operator_accounts(auth_user_id, status) VALUES ($1, 'suspended')",
       [id],
@@ -1194,13 +1238,27 @@ async function verifiedOperatorCandidate(withMfa = true): Promise<string> {
 
 const characterStore = createCharacterStore(database.pool);
 
-async function characterCandidate(email = `${randomUUID()}@example.test`): Promise<string> {
+async function characterCandidate(
+  email = `${randomUUID()}@example.test`,
+  pilot = true,
+): Promise<string> {
   const id = randomUUID();
   await owner.query(
     'INSERT INTO auth.users(id, email, email_confirmed_at) VALUES ($1, $2, now())',
     [id, email],
   );
+  if (pilot) await setPilotStatus(email, true);
   return id;
+}
+
+async function setPilotStatus(email: string, enabled: boolean): Promise<void> {
+  await owner.query('SELECT ops.set_character_pilot_status_by_email($1, $2, $3, $4, $5)', [
+    email,
+    enabled,
+    'integration-test-owner',
+    enabled ? 'Private test fixture' : 'Private test fixture revoked',
+    randomUUID(),
+  ]);
 }
 
 async function removeCharacterCandidate(id: string): Promise<void> {
@@ -1220,6 +1278,235 @@ async function removeCharacterCandidate(id: string): Promise<void> {
 async function authorityCheck(input: CharacterAuthorityInput) {
   return withTransaction(database.pool, (client) => authorizeCharacterOperation(client, input));
 }
+
+test('ordinary verified account remains unavailable while the global switch is on', async () => {
+  const id = await characterCandidate(undefined, false);
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    expect(await authorityCheck({ authUserId: id, operation: 'character.create' })).toEqual({
+      kind: 'denied',
+      reason: 'pilot_unavailable',
+    });
+    expect(await characterStore.getMe(id)).toMatchObject({
+      creation: { status: 'feature_disabled', notBefore: null },
+    });
+    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({ kind: 'disabled' });
+    expect(
+      (await owner.query('SELECT id FROM game.accounts WHERE auth_user_id = $1', [id])).rowCount,
+    ).toBe(0);
+    await owner.query(
+      "INSERT INTO game.accounts(auth_user_id, access_state) VALUES ($1, 'restricted')",
+      [id],
+    );
+    expect(await characterStore.getMe(id)).toMatchObject({
+      mode: 'restricted',
+      creation: { status: 'restricted' },
+    });
+    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({
+      kind: 'account_restricted',
+    });
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+test('revoked pilot cannot replay a committed creation receipt', async () => {
+  const email = `${randomUUID()}@example.test`;
+  const id = await characterCandidate(email);
+  const key = randomUUID();
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    const first = await characterStore.create(id, 'Civilian', key);
+    expect(first).toMatchObject({ kind: 'created', replayed: false });
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ ...first, replayed: true });
+    await setPilotStatus(email, false);
+    expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'disabled' });
+    expect(await characterStore.getMe(id)).toMatchObject({
+      creation: { status: 'feature_disabled' },
+    });
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM game.character_creation_receipts WHERE account_id = (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
+          [id],
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+  } finally {
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+});
+
+async function blockedAuthorityPid(fragment: string): Promise<number> {
+  let pid: number | undefined;
+  await expect
+    .poll(
+      async () => {
+        pid = (
+          await owner.query<{ pid: number }>(
+            "SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND position($1 IN query) > 0 AND pid <> pg_backend_pid()",
+            [fragment],
+          )
+        ).rows[0]?.pid;
+        return pid;
+      },
+      { timeout: 5_000, interval: 20 },
+    )
+    .toBeTypeOf('number');
+  return pid!;
+}
+
+test('pilot lock helper waits for the current private row without broader runtime privilege', async () => {
+  const id = await characterCandidate();
+  const state = await owner.connect();
+  const runtime = await database.pool.connect();
+  const statePid = (await state.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!
+    .pid;
+  const runtimePid = (await runtime.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+    .rows[0]!.pid;
+  let pending: Promise<unknown> | undefined;
+  try {
+    expect(runtimePid).not.toBe(statePid);
+    await state.query('BEGIN');
+    await state.query(
+      'SELECT auth_user_id FROM ops.character_pilot_access WHERE auth_user_id = $1 FOR UPDATE',
+      [id],
+    );
+    await runtime.query('BEGIN');
+    pending = runtime.query('SELECT ops.lock_character_pilot_access($1::uuid) AS enabled', [id]);
+    void pending.catch(() => undefined);
+    expect(await blockedAuthorityPid('lock_character_pilot_access')).toBe(runtimePid);
+    await state.query('COMMIT');
+    expect(await pending).toMatchObject({
+      rows: [{ enabled: true }],
+    });
+    await runtime.query('COMMIT');
+  } finally {
+    await state.query('ROLLBACK');
+    await runtime.query('ROLLBACK');
+    if (pending) await Promise.allSettled([pending]);
+    state.release();
+    runtime.release();
+    await removeCharacterCandidate(id);
+  }
+}, 15_000);
+
+test('pilot revocation committed first denies a waiting creation', async () => {
+  const email = `${randomUUID()}@example.test`;
+  const id = await characterCandidate(email);
+  const state = await owner.connect();
+  const statePid = (await state.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!
+    .pid;
+  let pending: ReturnType<typeof characterStore.create> | undefined;
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await state.query('BEGIN');
+    await state.query('SELECT ops.set_character_pilot_status_by_email($1, false, $2, $3, $4)', [
+      email,
+      'integration-test-owner',
+      'Pilot revoked during creation',
+      randomUUID(),
+    ]);
+    pending = characterStore.create(id, 'Civilian', randomUUID());
+    void pending.catch(() => undefined);
+    const createPid = await blockedAuthorityPid('operator-account:');
+    expect(createPid).not.toBe(statePid);
+    await state.query('COMMIT');
+    expect(await pending).toEqual({ kind: 'disabled' });
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM game.characters WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
+          [id],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM game.character_creation_receipts WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
+          [id],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+  } finally {
+    await state.query('ROLLBACK');
+    state.release();
+    if (pending) await Promise.allSettled([pending]);
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+}, 15_000);
+
+test('creation committed first persists before a waiting pilot revocation', async () => {
+  const email = `${randomUUID()}@example.test`;
+  const id = await characterCandidate(email);
+  const accountId = (
+    await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+      [id],
+    )
+  ).rows[0]!.id;
+  const blocker = await owner.connect();
+  const state = await owner.connect();
+  const blockerPid = (await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+    .rows[0]!.pid;
+  const statePid = (await state.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!
+    .pid;
+  let pending: ReturnType<typeof characterStore.create> | undefined;
+  let revoke: Promise<unknown> | undefined;
+  try {
+    await owner.query('UPDATE ops.feature_controls SET characters = true WHERE singleton');
+    await blocker.query('BEGIN');
+    await blocker.query('SELECT id FROM game.accounts WHERE id = $1 FOR UPDATE', [accountId]);
+    pending = characterStore.create(id, 'Civilian', randomUUID());
+    void pending.catch(() => undefined);
+    const createPid = await blockedAuthorityPid('FROM game.accounts WHERE auth_user_id');
+    expect(createPid).not.toBe(blockerPid);
+    expect(createPid).not.toBe(statePid);
+    revoke = state.query('SELECT ops.set_character_pilot_status_by_email($1, false, $2, $3, $4)', [
+      email,
+      'integration-test-owner',
+      'Pilot revoked after creation',
+      randomUUID(),
+    ]);
+    void revoke.catch(() => undefined);
+    expect(await blockedAuthorityPid('SELECT ops.set_character_pilot_status_by_email')).toBe(
+      statePid,
+    );
+    await blocker.query('COMMIT');
+    expect(await pending).toMatchObject({ kind: 'created', replayed: false });
+    await revoke;
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM game.characters WHERE account_id = $1',
+          [accountId],
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM game.character_creation_receipts WHERE account_id = $1',
+          [accountId],
+        )
+      ).rows[0]?.count,
+    ).toBe(1);
+    expect(await characterStore.create(id, 'Civilian', randomUUID())).toEqual({ kind: 'disabled' });
+  } finally {
+    await blocker.query('ROLLBACK');
+    blocker.release();
+    if (pending) await Promise.allSettled([pending]);
+    if (revoke) await Promise.allSettled([revoke]);
+    state.release();
+    await owner.query('UPDATE ops.feature_controls SET characters = false WHERE singleton');
+    await removeCharacterCandidate(id);
+  }
+}, 15_000);
 
 test('named reads remain available without an account and create reports the disabled flag', async () => {
   const id = await characterCandidate();
@@ -2054,6 +2341,7 @@ test('unverified, banned, and missing Auth identities cannot gain or replay a re
     expect(await characterStore.getMe(id)).toEqual({ kind: 'auth_ineligible' });
     expect(await characterStore.create(id, 'Civilian', key)).toEqual({ kind: 'auth_ineligible' });
     await owner.query('UPDATE auth.users SET email_confirmed_at = now() WHERE id = $1', [id]);
+    await setPilotStatus(`${id}@example.test`, true);
     expect(await characterStore.create(id, 'Civilian', key)).toMatchObject({ kind: 'created' });
     await owner.query(
       "UPDATE auth.users SET banned_until = clock_timestamp() + interval '1 day' WHERE id = $1",

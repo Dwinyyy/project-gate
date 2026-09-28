@@ -26,6 +26,7 @@ export type CharacterAuthorityResult =
       reason:
         | 'operator_only'
         | 'auth_ineligible'
+        | 'pilot_unavailable'
         | 'account_restricted'
         | 'character_missing'
         | 'stale_revision'
@@ -91,6 +92,15 @@ export async function authorizeCharacterOperation(
   );
   if (auth.rows[0]?.eligible !== true) return { kind: 'denied', reason: 'auth_ineligible' };
 
+  let pilotEnabled = false;
+  if (operation === 'character.create') {
+    const pilot = await client.query<{ enabled: boolean }>(
+      'SELECT ops.lock_character_pilot_access($1::uuid) AS enabled',
+      [input.authUserId],
+    );
+    pilotEnabled = pilot.rows[0]?.enabled === true;
+  }
+
   const account = await client.query<AccountRow>(
     `SELECT id, access_state FROM game.accounts WHERE auth_user_id = $1::uuid
      ${operation === 'character.create' ? 'FOR UPDATE' : 'FOR SHARE'}`,
@@ -105,6 +115,7 @@ export async function authorizeCharacterOperation(
     return { kind: 'denied', reason: 'account_restricted' };
   }
   if (operation === 'character.create') {
+    if (!pilotEnabled) return { kind: 'denied', reason: 'pilot_unavailable' };
     return { kind: 'allowed', accountId, charactersEnabled };
   }
   if (
