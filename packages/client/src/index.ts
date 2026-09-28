@@ -18,6 +18,8 @@ export {
   type TotpEnrollment,
 } from './auth.js';
 
+export { CharacterActionError, createMyCharacter, getMyCharacter } from './character.js';
+
 function isStatus(value: unknown): value is SystemStatus {
   if (!value || typeof value !== 'object') return false;
   const status = value as Record<string, unknown>;
