@@ -62,6 +62,25 @@ describe('character client', () => {
   });
 
   it.each([
+    [
+      'appearance preset array',
+      {
+        character: {
+          ...me.character,
+          appearance: { ...me.character.appearance, presetId: ['portrait-01'] },
+        },
+      },
+    ],
+    ['presence array', { character: { ...me.character, presenceState: ['active'] } }],
+  ])('rejects malformed enum values: %s', async (_name, replacement) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ ...me, ...replacement }));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(getMyCharacter(token)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it.each([
     [401, 'UNAUTHENTICATED'],
     [403, 'ACCOUNT_RESTRICTED'],
     [409, 'CHARACTER_SLOT_OCCUPIED'],
@@ -101,6 +120,15 @@ describe('character client', () => {
       name: 'AbortError',
     });
     expect(fetcher.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+
+  it.each([200, 503])('preserves abort during HTTP %s response body reading', async (status) => {
+    const abortError = new DOMException('Aborted while reading', 'AbortError');
+    const response = new Response(null, { status });
+    vi.spyOn(response, 'json').mockRejectedValue(abortError);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetcher);
+    await expect(getMyCharacter(token)).rejects.toBe(abortError);
   });
 
   it('posts exactly the selected appearance and operation ID with idempotency headers', async () => {

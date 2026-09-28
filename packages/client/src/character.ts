@@ -47,6 +47,14 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   );
 }
 
+function isOneOf(value: unknown, options: readonly string[]): boolean {
+  return typeof value === 'string' && options.includes(value);
+}
+
+function isAbortError(error: unknown): error is Error {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
 function dateTime(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -63,12 +71,10 @@ function appearance(value: unknown): value is AppearanceChoice {
     return false;
   return (
     value.catalogVersion === 1 &&
-    ['portrait-01', 'portrait-02', 'portrait-03', 'portrait-04'].includes(String(value.presetId)) &&
-    ['tone-01', 'tone-02', 'tone-03', 'tone-04', 'tone-05', 'tone-06'].includes(
-      String(value.skinToneId),
-    ) &&
-    ['cropped', 'swept', 'curly', 'coiled', 'shaved'].includes(String(value.hairStyleId)) &&
-    ['black', 'brown', 'auburn', 'blond', 'silver'].includes(String(value.hairColorId))
+    isOneOf(value.presetId, ['portrait-01', 'portrait-02', 'portrait-03', 'portrait-04']) &&
+    isOneOf(value.skinToneId, ['tone-01', 'tone-02', 'tone-03', 'tone-04', 'tone-05', 'tone-06']) &&
+    isOneOf(value.hairStyleId, ['cropped', 'swept', 'curly', 'coiled', 'shaved']) &&
+    isOneOf(value.hairColorId, ['black', 'brown', 'auburn', 'blond', 'silver'])
   );
 }
 
@@ -108,8 +114,8 @@ function validMe(value: unknown): value is MeResponse {
     appearance(c.appearance) &&
     (c.lifeState === 'alive' || c.lifeState === 'incapacitated') &&
     (c.awakeningState === 'unawakened' || c.awakeningState === 'awakened') &&
-    ['sheltered', 'active', 'committed'].includes(String(c.presenceState)) &&
-    ['private', 'limited', 'public'].includes(String(c.profileVisibility)) &&
+    isOneOf(c.presenceState, ['sheltered', 'active', 'committed']) &&
+    isOneOf(c.profileVisibility, ['private', 'limited', 'public']) &&
     typeof c.revision === 'string' &&
     /^(0|[1-9][0-9]*)$/.test(c.revision) &&
     dateTime(c.createdAt)
@@ -152,7 +158,8 @@ async function raiseResponseError(response: Response): Promise<never> {
       code = value.error.code;
       requestId = value.error.requestId;
     }
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     // Malformed error bodies deliberately collapse to the same safe error.
   }
   const message =
@@ -177,14 +184,15 @@ async function request<T>(
   try {
     response = await fetch(path, init);
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw error;
+    if (isAbortError(error)) throw error;
     throw new CharacterActionError('UNAVAILABLE', safeMessage);
   }
   if (!response.ok) return raiseResponseError(response);
   let value: unknown;
   try {
     value = await response.json();
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new CharacterActionError('INVALID_RESPONSE', safeMessage, { status: response.status });
   }
   if (!parse(value))
