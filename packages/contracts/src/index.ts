@@ -1,6 +1,13 @@
 import type { FromSchema } from 'json-schema-to-ts';
 
 export {
+  appearanceCatalogVersion,
+  appearanceCatalog,
+  appearanceChoiceSchema,
+  type AppearanceChoice,
+} from './appearance.js';
+
+export {
   authConfigSchema,
   operatorSessionSchema,
   selfSessionSchema,

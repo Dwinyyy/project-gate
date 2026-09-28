@@ -130,6 +130,194 @@ test('game identities use private tables and safe independent lifecycle defaults
   }
 });
 
+test('backfills_existing_character_with_renderable_v1_appearance', async () => {
+  const id = await characterCandidate();
+  let accountId: string | undefined;
+  try {
+    const account = await owner.query<{ id: string }>(
+      'INSERT INTO game.accounts(auth_user_id) VALUES ($1) RETURNING id',
+      [id],
+    );
+    accountId = account.rows[0]!.id;
+    const character = await owner.query<{ id: string }>(
+      "INSERT INTO game.characters(account_id, display_alias) VALUES ($1, 'Legacy') RETURNING id",
+      [account.rows[0]!.id],
+    );
+    expect(
+      (
+        await owner.query(
+          'SELECT catalog_version, preset_id, skin_tone_id, hair_style_id, hair_color_id FROM game.characters WHERE id = $1',
+          [character.rows[0]!.id],
+        )
+      ).rows,
+    ).toEqual([
+      {
+        catalog_version: 1,
+        preset_id: 'portrait-01',
+        skin_tone_id: 'tone-03',
+        hair_style_id: 'cropped',
+        hair_color_id: 'black',
+      },
+    ]);
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
+    expect(
+      (await owner.query('SELECT id FROM game.characters WHERE id = $1', [character.rows[0]!.id]))
+        .rowCount,
+    ).toBe(1);
+    expect(
+      (
+        await owner.query('SELECT auth_user_id FROM game.accounts WHERE id = $1', [
+          account.rows[0]!.id,
+        ])
+      ).rows,
+    ).toEqual([{ auth_user_id: null }]);
+  } finally {
+    if (accountId) {
+      await owner.query('DELETE FROM game.characters WHERE account_id = $1', [accountId]);
+      await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+    }
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
+  }
+});
+
+test('rejects_unknown_appearance_ids', async () => {
+  const account = await owner.query<{ id: string }>(
+    'INSERT INTO game.accounts DEFAULT VALUES RETURNING id',
+  );
+  const accountId = account.rows[0]!.id;
+  try {
+    for (const field of [
+      'catalog_version',
+      'preset_id',
+      'skin_tone_id',
+      'hair_style_id',
+      'hair_color_id',
+    ]) {
+      await expect(
+        owner.query(
+          `INSERT INTO game.characters(account_id, display_alias, ${field}) VALUES ($1, 'Invalid', $2)`,
+          [accountId, field === 'catalog_version' ? 2 : 'unknown'],
+        ),
+      ).rejects.toMatchObject({ code: '23514' });
+    }
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM game.characters WHERE account_id = $1',
+          [accountId],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+  } finally {
+    await owner.query('DELETE FROM game.accounts WHERE id = $1', [accountId]);
+  }
+});
+
+test('owner_pilot_grant_and_revoke_are_audited_and_idempotent', async () => {
+  const email = `${randomUUID()}@example.test`;
+  const id = await characterCandidate(email);
+  const request = randomUUID();
+  const query = 'SELECT ops.set_character_pilot_status_by_email($1, $2, $3, $4, $5) AS receipt';
+  try {
+    const terms = [email.toUpperCase(), true, 'owner', 'Private test', request];
+    const granted = (await owner.query(query, terms)).rows[0]?.receipt;
+    expect(granted).toMatchObject({
+      auth_user_id: id,
+      previous_enabled: false,
+      enabled: true,
+      requested_by: 'owner',
+      reason: 'Private test',
+      database_actor: 'postgres',
+    });
+    expect((await owner.query(query, terms)).rows[0]?.receipt).toEqual(granted);
+    await expect(
+      owner.query(query, [email, false, 'owner', 'Private test', request]),
+    ).rejects.toMatchObject({ code: '22023' });
+    expect(
+      (
+        await owner.query(
+          'SELECT enabled FROM ops.character_pilot_access WHERE auth_user_id = $1',
+          [id],
+        )
+      ).rows,
+    ).toEqual([{ enabled: true }]);
+    const revoke = (await owner.query(query, [email, false, 'owner', 'Pilot ended', randomUUID()]))
+      .rows[0]?.receipt;
+    expect(revoke).toMatchObject({ auth_user_id: id, previous_enabled: true, enabled: false });
+    expect((await owner.query(query, terms)).rows[0]?.receipt).toEqual(granted);
+    expect(
+      (
+        await owner.query(
+          'SELECT enabled FROM ops.character_pilot_access WHERE auth_user_id = $1',
+          [id],
+        )
+      ).rows,
+    ).toEqual([{ enabled: false }]);
+    await expect(
+      owner.query('UPDATE ops.character_pilot_changes SET reason = $1 WHERE request_id = $2', [
+        'rewrite',
+        request,
+      ]),
+    ).rejects.toMatchObject({ code: '42501' });
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM ops.character_pilot_access WHERE auth_user_id = $1',
+          [id],
+        )
+      ).rows[0]?.count,
+    ).toBe(0);
+    expect(
+      (
+        await owner.query(
+          'SELECT count(*)::int AS count FROM ops.character_pilot_changes WHERE auth_user_id = $1',
+          [id],
+        )
+      ).rows[0]?.count,
+    ).toBe(2);
+  } finally {
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
+  }
+});
+
+test('runtime_and_public_roles_cannot_change_pilot_access', async () => {
+  const email = `${randomUUID()}@example.test`;
+  const id = await characterCandidate(email);
+  try {
+    for (const role of ['hunter_runtime', 'anon', 'authenticated', 'service_role']) {
+      const grants = (
+        await owner.query(
+          `SELECT has_column_privilege($1, 'ops.character_pilot_access', 'auth_user_id', 'SELECT') AS read_id, has_column_privilege($1, 'ops.character_pilot_access', 'enabled', 'SELECT') AS read_enabled, has_column_privilege($1, 'ops.character_pilot_access', 'updated_at', 'SELECT') AS read_updated_at, has_table_privilege($1, 'ops.character_pilot_access', 'INSERT,UPDATE,DELETE') AS write, has_table_privilege($1, 'ops.character_pilot_changes', 'INSERT,UPDATE,DELETE') AS audit_write, has_function_privilege($1, 'ops.set_character_pilot_status_by_email(text,boolean,text,text,uuid)', 'EXECUTE') AS execute`,
+          [role],
+        )
+      ).rows[0];
+      expect(grants).toEqual({
+        read_id: role === 'hunter_runtime',
+        read_enabled: role === 'hunter_runtime',
+        read_updated_at: false,
+        write: false,
+        audit_write: false,
+        execute: false,
+      });
+    }
+    await owner.query(
+      "INSERT INTO ops.operator_accounts(auth_user_id, status) VALUES ($1, 'suspended')",
+      [id],
+    );
+    await expect(
+      owner.query('SELECT ops.set_character_pilot_status_by_email($1, true, $2, $3)', [
+        email,
+        'owner',
+        'No operator grants',
+      ]),
+    ).rejects.toMatchObject({ code: '22023' });
+  } finally {
+    await owner.query('DELETE FROM ops.operator_accounts WHERE auth_user_id = $1', [id]);
+    await owner.query('DELETE FROM auth.users WHERE id = $1', [id]);
+  }
+});
+
 test('account access defaults active, permits owner restriction, and rejects other values', async () => {
   const accountId = (
     await owner.query<{ id: string }>('INSERT INTO game.accounts DEFAULT VALUES RETURNING id')
