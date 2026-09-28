@@ -121,10 +121,37 @@ BEGIN
 END;
 $$;
 
+-- PostgreSQL requires UPDATE privilege for a caller's SELECT FOR SHARE. Keep
+-- runtime read-only: the trusted migration/table owner takes the row lock.
+-- The function owner and pinned search path are security-sensitive migration
+-- read-back checks; no public role may execute this SECURITY DEFINER routine.
+CREATE FUNCTION ops.lock_character_pilot_access(p_auth_user_id uuid) RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+  pilot_enabled boolean;
+BEGIN
+  IF p_auth_user_id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  SELECT enabled INTO pilot_enabled
+    FROM ops.character_pilot_access
+    WHERE auth_user_id = p_auth_user_id
+    FOR SHARE;
+  RETURN coalesce(pilot_enabled, false);
+END;
+$$;
+
 REVOKE ALL ON ops.character_pilot_access, ops.character_pilot_changes FROM PUBLIC, hunter_runtime;
 REVOKE ALL ON FUNCTION ops.prevent_character_pilot_change_rewrite() FROM PUBLIC, hunter_runtime;
 REVOKE ALL ON FUNCTION ops.set_character_pilot_status_by_email(text, boolean, text, text, uuid) FROM PUBLIC, hunter_runtime;
+REVOKE ALL ON FUNCTION ops.lock_character_pilot_access(uuid) FROM PUBLIC;
 GRANT SELECT (auth_user_id, enabled) ON ops.character_pilot_access TO hunter_runtime;
+GRANT EXECUTE ON FUNCTION ops.lock_character_pilot_access(uuid) TO hunter_runtime;
 
 DO $$
 DECLARE role_name text;
@@ -134,6 +161,7 @@ BEGIN
       EXECUTE format('REVOKE ALL ON ops.character_pilot_access, ops.character_pilot_changes FROM %I', role_name);
       EXECUTE format('REVOKE ALL ON FUNCTION ops.prevent_character_pilot_change_rewrite() FROM %I', role_name);
       EXECUTE format('REVOKE ALL ON FUNCTION ops.set_character_pilot_status_by_email(text, boolean, text, text, uuid) FROM %I', role_name);
+      EXECUTE format('REVOKE ALL ON FUNCTION ops.lock_character_pilot_access(uuid) FROM %I', role_name);
     END IF;
   END LOOP;
 END
