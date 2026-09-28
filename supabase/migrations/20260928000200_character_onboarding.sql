@@ -12,6 +12,11 @@ ALTER TABLE game.characters
   ADD COLUMN hair_color_id text NOT NULL DEFAULT 'black'
     CONSTRAINT characters_hair_color_id_check CHECK (hair_color_id IN ('black', 'brown', 'auburn', 'blond', 'silver'));
 
+-- Task 2.3 already grants account_id and display_alias. Explicit appearance
+-- creation needs only these additional INSERT columns; runtime cannot edit them.
+GRANT INSERT (catalog_version, preset_id, skin_tone_id, hair_style_id, hair_color_id)
+  ON game.characters TO hunter_runtime;
+
 CREATE TABLE ops.character_pilot_access (
   auth_user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   enabled boolean NOT NULL,
