@@ -121,6 +121,37 @@ describe('private character API', () => {
     expect(first.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it('canonicalizes UUID key casing so the same receipt has byte-identical responses', async () => {
+    const canonical = 'a3333333-3333-4333-8333-333333333333';
+    const received: string[] = [];
+    const characters: CharacterStore = {
+      getMe: async () => player,
+      create: async (_authUserId, _alias, receivedOperationId) => {
+        received.push(receivedOperationId);
+        return { ...created, operationId: receivedOperationId, replayed: received.length > 1 };
+      },
+    };
+    const app = makeApp({ characters });
+    const request = {
+      method: 'POST' as const,
+      url: '/v1/characters',
+      payload: { displayAlias: 'Civilian' },
+    };
+    const first = await app.inject({
+      ...request,
+      headers: { ...headers, 'idempotency-key': canonical.toUpperCase() },
+    });
+    const retry = await app.inject({
+      ...request,
+      headers: { ...headers, 'idempotency-key': canonical },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(retry.statusCode).toBe(201);
+    expect(first.body).toBe(retry.body);
+    expect(first.json().operationId).toBe(canonical);
+    expect(received).toEqual([canonical, canonical]);
+  });
+
   it.each([
     [null, 401, 'AUTH_REQUIRED'],
     [{ ...identity, accessMode: 'recovery' as const }, 403, 'PASSWORD_UPDATE_REQUIRED'],
@@ -268,6 +299,7 @@ describe('private character API', () => {
   it.each([
     [{ displayAlias: '' }, operationId],
     [{ displayAlias: '   ' }, operationId],
+    [{ displayAlias: 'Civilian\u0000Injected' }, operationId],
     [{ displayAlias: 'x'.repeat(41) }, operationId],
     [{ displayAlias: 'Civilian', accountId: authUserId }, operationId],
     [{ displayAlias: 'Civilian' }, 'not-a-uuid'],

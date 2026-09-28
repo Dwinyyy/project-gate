@@ -138,7 +138,8 @@ export function registerCharacterRoutes(
           body &&
           typeof body === 'object' &&
           !Array.isArray(body) &&
-          Object.keys(body).some((key) => key !== 'displayAlias')
+          (Object.keys(body).some((key) => key !== 'displayAlias') ||
+            (typeof body.displayAlias === 'string' && body.displayAlias.includes('\u0000')))
         ) {
           failure(reply, request, 400, 'INVALID_REQUEST');
         }
@@ -162,7 +163,7 @@ export function registerCharacterRoutes(
         const result = await options.characters!.create(
           authUserId,
           request.body.displayAlias,
-          request.headers['idempotency-key'],
+          request.headers['idempotency-key'].toLowerCase(),
         );
         if (result.kind === 'created') {
           return reply.code(201).send({
