@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getSystemStatus } from '@hunter-world/client';
@@ -10,6 +10,10 @@ import { AccountControl } from './auth/AccountControl';
 import { AuthCallback } from './auth/AuthCallback';
 import { Recovery } from './auth/Recovery';
 import { useAccountAuth } from './auth/AuthProvider';
+import { useCharacterSession } from './character/useCharacterSession';
+import { CharacterSystem } from './character/CharacterSystem';
+import { BodyStatusDrawer } from './character/BodyStatusDrawer';
+import characterStyles from './character/Character.module.css';
 
 const navigation: { path: string; label: string; icon: IconName }[] = [
   { path: '/', label: 'System', icon: 'system' },
@@ -68,7 +72,7 @@ const plannedScreens = {
     heading: 'A clearer view of your condition.',
     description:
       'Your character’s condition and recovery will be available in the body-status panel.',
-    note: 'Body status requires a persistent character. Character creation is not available in this release.',
+    note: 'Body status is available after an eligible player creates a persistent character. Body resource measurements are not yet tracked.',
   },
   identity: {
     title: 'System ID',
@@ -322,6 +326,11 @@ function NotFoundScreen() {
 export function App() {
   const location = useLocation();
   const { auth, validation, session, validationError } = useAccountAuth();
+  const characterState = useCharacterSession();
+  const [drawerOwner, setDrawerOwner] = useState<string | null>(null);
+  const bodyControl = useRef<HTMLButtonElement>(null);
+  const character = characterState.data?.character;
+  const drawerOpen = !!character && drawerOwner !== null && drawerOwner === characterState.owner;
   const mainRef = useRef<HTMLElement>(null);
   const previousPath = useRef(location.pathname);
   const currentTitle =
@@ -436,12 +445,34 @@ export function App() {
             </span>
           </Link>
           <div className={styles.headerActions}>
+            {character ? (
+              <button
+                ref={bodyControl}
+                className={characterStyles.bodyControl}
+                type="button"
+                aria-label="Body status"
+                onClick={() => setDrawerOwner(characterState.owner)}
+              >
+                <Icon name="body" />
+              </button>
+            ) : null}
             <AccountControl />
           </div>
         </header>
-        <main id="main-content" className={styles.main} ref={mainRef} tabIndex={-1}>
+        <main
+          id="main-content"
+          className={styles.main}
+          ref={mainRef}
+          tabIndex={-1}
+          style={drawerOpen ? { overflowY: 'hidden' } : undefined}
+        >
           <Routes>
-            <Route path="/" element={<SystemScreen />} />
+            <Route
+              path="/"
+              element={
+                characterState.owner ? <CharacterSystem state={characterState} /> : <SystemScreen />
+              }
+            />
             {Object.entries(plannedScreens).map(([path, screen]) => (
               <Route key={path} path={`/${path}`} element={<PlannedScreen screen={screen} />} />
             ))}
@@ -472,6 +503,15 @@ export function App() {
             </NavLink>
           ))}
         </nav>
+        {character ? (
+          <BodyStatusDrawer
+            key={characterState.owner}
+            character={character}
+            open={drawerOpen}
+            onClose={() => setDrawerOwner(null)}
+            returnFocus={() => bodyControl.current?.focus()}
+          />
+        ) : null}
       </div>
     </div>
   );

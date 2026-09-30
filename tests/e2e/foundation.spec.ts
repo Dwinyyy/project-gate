@@ -273,6 +273,16 @@ test('operator shell stays hidden until assignment verification finishes', async
 
 test('ordinary main-site sign-in stays in the player application', async ({ page }) => {
   await useControlledAuth(page);
+  await page.route('**/v1/me', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 3,
+        mode: 'onboarding',
+        character: null,
+        creation: { status: 'feature_disabled', notBefore: null },
+      },
+    }),
+  );
   await page.route('**/auth/v1/token**', (route) =>
     route.fulfill({
       status: 200,
@@ -306,7 +316,8 @@ test('ordinary main-site sign-in stays in the player application', async ({ page
   await page.getByLabel('Password').fill('long-enough-password');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL('http://127.0.0.1:5173/');
-  await expect(page.getByRole('heading', { name: 'Welcome to Hunter World.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create your character' })).toBeVisible();
+  await expect(page.getByText(/Character creation is currently unavailable/)).toBeVisible();
 });
 
 test('player sees a dismissible warning when local sign-out lacks server confirmation', async ({

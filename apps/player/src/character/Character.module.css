@@ -1,0 +1,230 @@
+.panel,
+.identityCard,
+.modulePanel {
+  border: 1px solid var(--hw-border);
+  border-radius: 10px;
+  background: linear-gradient(145deg, #102027, #0c141d);
+  padding: 20px;
+  margin-bottom: 20px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.panel h1,
+.intro h1 {
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.25;
+  margin: 10px 0;
+  letter-spacing: -0.035em;
+}
+.eyebrow {
+  color: var(--hw-accent);
+  font: 9px var(--hw-mono);
+  letter-spacing: 0.12em;
+}
+.lead {
+  color: var(--hw-muted);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-block: 12px;
+}
+.hint {
+  color: var(--hw-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.form {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+.form label {
+  color: var(--hw-text);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.form input,
+.form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 10px;
+  border: 1px solid var(--hw-border);
+  border-radius: 6px;
+  background: #0a131c;
+  color: var(--hw-text);
+  font-size: 16px;
+}
+.portrait {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  height: auto;
+  margin: 18px auto;
+  border: 1px solid #34564e;
+  border-radius: 12px;
+}
+.portraitCompact {
+  display: block;
+  width: 114px;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #34564e;
+  border-radius: 12px;
+}
+.primaryButton,
+.secondaryButton,
+.closeButton,
+.bodyControl {
+  min-height: 44px;
+  min-width: 44px;
+  border: 1px solid #385d52;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--hw-accent);
+  background: #152c27;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.primaryButton {
+  background: #87c3aa;
+  color: #092019;
+  margin-top: 12px;
+  font-weight: 650;
+}
+.primaryButton:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.bodyControl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  padding: 10px;
+}
+.bodyControl svg {
+  width: 20px;
+  height: 20px;
+}
+.notice {
+  border-left: 2px solid #d7b878;
+  background: #29251d;
+  padding: 12px;
+  margin-block: 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #dfcfad;
+}
+.notice button {
+  margin-top: 12px;
+}
+.intro {
+  margin-bottom: 22px;
+  overflow-wrap: anywhere;
+}
+.identityCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+.identityDetails {
+  width: 100%;
+  min-width: 0;
+}
+.identityDetails h2 {
+  margin: 8px 0 16px;
+  font-size: 20px;
+  font-weight: 500;
+}
+.identityDetails dl,
+.bodyList {
+  margin: 0;
+}
+.identityDetails dl > div,
+.bodyList > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 14px;
+  padding-block: 11px;
+  border-bottom: 1px solid var(--hw-border-soft);
+  font-size: 12px;
+}
+.identityDetails dt,
+.bodyList dt {
+  color: var(--hw-muted);
+}
+.identityDetails dd,
+.bodyList dd {
+  margin: 0;
+  color: var(--hw-text);
+}
+.modulePanel h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+.modulePanel p,
+.modulePanel a {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.modulePanel p {
+  color: var(--hw-muted);
+  margin-bottom: 12px;
+}
+.modulePanel a {
+  color: var(--hw-accent);
+}
+.drawer {
+  position: fixed;
+  inset: auto 0 0;
+  width: min(100%, 480px);
+  max-width: 100%;
+  max-height: min(85dvh, 660px);
+  margin: 0 auto;
+  padding: 22px max(20px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #34564e;
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  background: #0d1921;
+  color: var(--hw-text);
+  animation: drawer-enter 160ms ease-out;
+}
+.drawer::backdrop {
+  background: #040a10bb;
+}
+.drawerTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.drawerTop h2 {
+  font-size: 23px;
+  font-weight: 500;
+  margin-top: 8px;
+}
+.bodyList {
+  margin-block: 20px;
+}
+@keyframes drawer-enter {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer {
+    animation: none;
+  }
+}
