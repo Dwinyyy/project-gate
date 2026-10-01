@@ -73,8 +73,8 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
       </h1>
       <p className={styles.accountLead}>
         {registering
-          ? 'Account access comes first. Your in-world character will be created separately when identity registration opens.'
-          : 'Sign in to retrieve your confirmed account session. Character access is not enabled yet.'}
+          ? 'Account access comes first. Your in-world character is created separately when creation is available for your account.'
+          : 'Sign in to retrieve your confirmed account session.'}
       </p>
       {passwordUpdated ? (
         <p className={styles.formSuccess} role="status">
