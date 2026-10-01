@@ -57,12 +57,28 @@
 }
 .portrait {
   display: block;
-  width: 160px;
+  width: 180px;
   max-width: 100%;
   height: auto;
   margin: 18px auto;
   border: 1px solid #34564e;
   border-radius: 12px;
+}
+.livePortrait {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin-block: 8px 4px;
+}
+.livePortrait .portrait {
+  margin: 10px auto 0;
+}
+.portraitDescription {
+  color: var(--hw-muted);
+  font-size: 11px;
+  line-height: 1.55;
+  text-align: center;
+  max-width: 32ch;
 }
 .portraitCompact {
   display: block;
@@ -71,6 +87,146 @@
   height: auto;
   border: 1px solid #34564e;
   border-radius: 12px;
+}
+.portraitMiniature {
+  display: block;
+  width: 72px;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #34564e;
+  border-radius: 8px;
+}
+.choiceGroup {
+  min-width: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+}
+.choiceGroup legend {
+  width: 100%;
+  margin-bottom: 10px;
+  color: var(--hw-text);
+  font-size: 12px;
+}
+.portraitChoices,
+.swatchChoices,
+.hairStyleChoices {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+.portraitChoices {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.swatchChoices {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.hairStyleChoices {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.portraitChoice,
+.swatchChoice,
+.hairStyleChoice {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  border: 1px solid #2e4b48;
+  border-radius: 8px;
+  background: #0a151d;
+  color: var(--hw-text);
+  cursor: pointer;
+}
+.form .portraitChoice,
+.form .swatchChoice,
+.form .hairStyleChoice {
+  margin: 0;
+}
+.portraitChoice,
+.hairStyleChoice {
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 7px 10px;
+  text-align: center;
+}
+.swatchChoice {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 68px;
+  padding: 6px 3px;
+  text-align: center;
+}
+.portraitChoice input,
+.swatchChoice input,
+.hairStyleChoice input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.portraitChoice:has(input:checked),
+.swatchChoice:has(input:checked),
+.hairStyleChoice:has(input:checked) {
+  border-color: var(--hw-accent);
+  box-shadow: inset 0 0 0 1px var(--hw-accent);
+  background: #10241f;
+}
+.portraitChoice:has(input:focus-visible),
+.swatchChoice:has(input:focus-visible),
+.hairStyleChoice:has(input:focus-visible) {
+  outline: 3px solid #b9f4dc;
+  outline-offset: 2px;
+}
+.portraitChoice:has(input:disabled),
+.swatchChoice:has(input:disabled),
+.hairStyleChoice:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.62;
+}
+.choiceLabel {
+  min-width: 0;
+  color: var(--hw-text);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.swatch {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 30px;
+  border: 1px solid #dce8e2;
+  border-radius: 5px;
+  background: var(--choice-swatch);
+  box-shadow: 0 0 0 1px #071016;
+}
+.choiceCheck {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  background: #07140f;
+  color: #b9f4dc;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+.choiceCheck:empty {
+  display: none;
 }
 .primaryButton,
 .secondaryButton,
@@ -233,5 +389,10 @@
 @media (prefers-reduced-motion: reduce) {
   .drawer {
     animation: none;
+  }
+}
+@media (min-width: 360px) {
+  .hairStyleChoices {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }

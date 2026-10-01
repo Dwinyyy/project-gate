@@ -142,7 +142,10 @@ test('temporary session validation outage quarantines an uncertain draft and pre
   });
   await page.goto('/');
   await page.getByLabel('Character alias').fill('  Quarantined  ');
-  await page.getByLabel('Hair style').selectOption('coiled');
+  await page
+    .getByRole('group', { name: 'Hair style' })
+    .locator('input[value="coiled"]')
+    .check({ force: true });
   await page.getByRole('button', { name: 'Create character', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
   const previousReads = reads;
@@ -204,13 +207,18 @@ test('unavailable attempt storage retains memory through failed confirmation and
   });
   await page.goto('/');
   await page.getByLabel('Character alias').fill('  Memory continuity  ');
-  await page.getByLabel('Hair style').selectOption('curly');
+  await page
+    .getByRole('group', { name: 'Hair style' })
+    .locator('input[value="curly"]')
+    .check({ force: true });
   await page.getByRole('button', { name: 'Create character', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Character service unavailable' })).toBeVisible();
   readUnavailable = false;
   await page.getByRole('button', { name: 'Retry character check' }).click();
   await expect(page.getByLabel('Character alias')).toHaveValue('Memory continuity');
-  await expect(page.getByLabel('Hair style')).toHaveValue('curly');
+  await expect(
+    page.getByRole('group', { name: 'Hair style' }).locator('input[value="curly"]'),
+  ).toBeChecked();
   await page.getByRole('button', { name: 'Retry creation' }).click();
   await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
   const refreshedToken = session.access_token.replace(
@@ -346,38 +354,48 @@ test('portrait and skin options describe visible traits while preserving the cat
     }),
   );
   await page.goto('/');
-  await expect(page.getByLabel('Base portrait').locator('option')).toHaveText([
+  const portraitGroup = page.getByRole('group', { name: 'Base portrait' });
+  for (const label of [
     'Oval face, teal jacket',
     'Long face, violet jacket',
     'Broad face, blue jacket',
     'Tapered face, brown jacket',
-  ]);
-  await expect(page.getByLabel('Skin tone', { exact: true }).locator('option')).toHaveText([
+  ]) {
+    await expect(portraitGroup.getByRole('radio', { name: label, exact: true })).toBeVisible();
+  }
+  const toneGroup = page.getByRole('group', { name: 'Skin tone' });
+  for (const label of [
     'Light beige',
     'Warm beige',
     'Medium tan',
     'Warm brown',
     'Deep brown',
     'Dark brown',
-  ]);
+  ]) {
+    await expect(toneGroup.getByRole('radio', { name: label, exact: true })).toBeVisible();
+  }
   expect(
     await page
-      .getByLabel('Base portrait')
-      .locator('option')
-      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+      .getByRole('group', { name: 'Base portrait' })
+      .getByRole('radio')
+      .evaluateAll((options) => options.map((option) => (option as HTMLInputElement).value)),
   ).toEqual(['portrait-01', 'portrait-02', 'portrait-03', 'portrait-04']);
   expect(
     await page
-      .getByLabel('Skin tone', { exact: true })
-      .locator('option')
-      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+      .getByRole('group', { name: 'Skin tone' })
+      .getByRole('radio')
+      .evaluateAll((options) => options.map((option) => (option as HTMLInputElement).value)),
   ).toEqual(['tone-01', 'tone-02', 'tone-03', 'tone-04', 'tone-05', 'tone-06']);
-  await page.getByLabel('Base portrait').selectOption('portrait-03');
-  await page.getByLabel('Skin tone', { exact: true }).selectOption('tone-05');
+  await page
+    .getByRole('group', { name: 'Base portrait' })
+    .locator('input[value="portrait-03"]')
+    .check({ force: true });
+  await page
+    .getByRole('group', { name: 'Skin tone' })
+    .locator('input[value="tone-05"]')
+    .check({ force: true });
   await expect(
-    page.getByRole('img', {
-      name: 'Portrait: Broad face, blue jacket, Deep brown, cropped hair, black hair',
-    }),
+    page.getByText('Broad face, deep brown skin, cropped black hair, blue jacket.'),
   ).toBeVisible();
 });
 
@@ -494,14 +512,28 @@ test('allowlisted player creates one visual identity and refresh recovers confir
     ['Hair style', 5],
     ['Hair color', 5],
   ] as const) {
-    await expect(page.getByLabel(label, { exact: true }).locator('option')).toHaveCount(count);
+    await expect(page.getByRole('group', { name: label }).getByRole('radio')).toHaveCount(count);
   }
   await page.getByLabel('Character alias').fill('Aster');
-  await page.getByLabel('Base portrait').selectOption('portrait-02');
-  await page.getByLabel('Skin tone', { exact: true }).selectOption('tone-03');
-  await page.getByLabel('Hair style').selectOption('curly');
-  await page.getByLabel('Hair color').selectOption('auburn');
-  await expect(page.getByRole('img', { name: /portrait.*curly.*auburn/i })).toBeVisible();
+  await page
+    .getByRole('group', { name: 'Base portrait' })
+    .locator('input[value="portrait-02"]')
+    .check({ force: true });
+  await page
+    .getByRole('group', { name: 'Skin tone' })
+    .locator('input[value="tone-03"]')
+    .check({ force: true });
+  await page
+    .getByRole('group', { name: 'Hair style' })
+    .locator('input[value="curly"]')
+    .check({ force: true });
+  await page
+    .getByRole('group', { name: 'Hair color' })
+    .locator('input[value="auburn"]')
+    .check({ force: true });
+  await expect(
+    page.getByText('Long face, medium tan skin, curly auburn hair, violet jacket.'),
+  ).toBeVisible();
   await page.screenshot({ path: 'test-results/character-onboarding-390.png' });
   await page.getByRole('button', { name: 'Create character' }).dblclick();
   await expect(page.getByRole('heading', { name: 'Aster', level: 1 })).toBeVisible();
@@ -520,6 +552,7 @@ test('allowlisted player creates one visual identity and refresh recovers confir
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Aster', level: 1 })).toBeVisible();
   await page.screenshot({ path: 'test-results/character-overview-390.png' });
+  await page.screenshot({ path: '.cache/avatar-refinement-system-390.png' });
   await page.getByRole('button', { name: 'Body status' }).click();
   await expect(page.getByRole('dialog', { name: 'Body status' })).toBeVisible();
   await expect(page.getByText('Dormant', { exact: true })).toBeVisible();
@@ -636,13 +669,18 @@ test('lost response reads state before explicit exact retry, retains draft acros
   });
   await page.goto('/');
   await page.getByLabel('Character alias').fill('  Retry me  ');
-  await page.getByLabel('Hair style').selectOption('coiled');
+  await page
+    .getByRole('group', { name: 'Hair style' })
+    .locator('input[value="coiled"]')
+    .check({ force: true });
   await page.getByRole('button', { name: 'Create character', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
   expect(reads).toBeGreaterThan(requests[0]!.reads);
   await page.reload();
   await expect(page.getByLabel('Character alias')).toHaveValue('Retry me');
-  await expect(page.getByLabel('Hair style')).toHaveValue('coiled');
+  await expect(
+    page.getByRole('group', { name: 'Hair style' }).locator('input[value="coiled"]'),
+  ).toBeChecked();
   expect(requests).toHaveLength(1);
   await page.getByRole('button', { name: 'Retry creation' }).click();
   await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();

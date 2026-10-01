@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type FormEvent,
+} from 'react';
 import { CharacterActionError, createMyCharacter } from '@hunter-world/client';
 import {
   appearanceCatalog,
@@ -7,7 +14,7 @@ import {
   type CreateCharacterInput,
   type MeResponse,
 } from '@hunter-world/contracts';
-import { CharacterPortrait } from './CharacterPortrait';
+import { appearanceDescription, CharacterPortrait } from './CharacterPortrait';
 import styles from './Character.module.css';
 import {
   characterAttemptKey,
@@ -27,6 +34,21 @@ const initialAppearance: AppearanceChoice = {
   hairStyleId: appearanceCatalog.hairStyles[0].id,
   hairColorId: appearanceCatalog.hairColors[0].id,
 };
+
+const skinSwatches = ['#f2d8bd', '#dfb792', '#bf8c68', '#9f6549', '#754a39', '#51362c'];
+const hairSwatches = ['#171b20', '#503628', '#a45a3e', '#d8af67', '#b7bac0'];
+
+function swatchStyle(color: string) {
+  return { '--choice-swatch': color } as CSSProperties;
+}
+
+function SelectedCheck({ visible }: { visible: boolean }) {
+  return (
+    <span className={styles.choiceCheck} aria-hidden="true">
+      {visible ? '✓' : ''}
+    </span>
+  );
+}
 
 function unavailableMessage(status: MeResponse['creation']['status'], notBefore: string | null) {
   switch (status) {
@@ -230,79 +252,116 @@ export function CharacterOnboarding({
           <p className={styles.hint}>
             1–40 characters. Your account owns one living character at a time.
           </p>
-          <CharacterPortrait appearance={appearance} />
-          <label htmlFor="portrait-preset">Base portrait</label>
-          <select
-            disabled={busy}
-            id="portrait-preset"
-            value={appearance.presetId}
-            onChange={(event) =>
-              setAppearance((current) => ({
-                ...current,
-                presetId: event.target.value as AppearanceChoice['presetId'],
-              }))
-            }
-          >
-            {appearanceCatalog.presets.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <label htmlFor="portrait-tone">Skin tone</label>
-          <select
-            disabled={busy}
-            id="portrait-tone"
-            value={appearance.skinToneId}
-            onChange={(event) =>
-              setAppearance((current) => ({
-                ...current,
-                skinToneId: event.target.value as AppearanceChoice['skinToneId'],
-              }))
-            }
-          >
-            {appearanceCatalog.skinTones.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <label htmlFor="portrait-hair-style">Hair style</label>
-          <select
-            disabled={busy}
-            id="portrait-hair-style"
-            value={appearance.hairStyleId}
-            onChange={(event) =>
-              setAppearance((current) => ({
-                ...current,
-                hairStyleId: event.target.value as AppearanceChoice['hairStyleId'],
-              }))
-            }
-          >
-            {appearanceCatalog.hairStyles.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <label htmlFor="portrait-hair-color">Hair color</label>
-          <select
-            disabled={busy}
-            id="portrait-hair-color"
-            value={appearance.hairColorId}
-            onChange={(event) =>
-              setAppearance((current) => ({
-                ...current,
-                hairColorId: event.target.value as AppearanceChoice['hairColorId'],
-              }))
-            }
-          >
-            {appearanceCatalog.hairColors.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <div className={styles.livePortrait}>
+            <CharacterPortrait appearance={appearance} decorative />
+            <output className={styles.portraitDescription} aria-live="polite">
+              {appearanceDescription(appearance)}
+            </output>
+          </div>
+          <fieldset className={styles.choiceGroup} disabled={busy}>
+            <legend>Base portrait</legend>
+            <div className={styles.portraitChoices}>
+              {appearanceCatalog.presets.map((option) => {
+                const checked = appearance.presetId === option.id;
+                return (
+                  <label className={styles.portraitChoice} key={option.id}>
+                    <input
+                      type="radio"
+                      name="portrait-preset"
+                      value={option.id}
+                      checked={checked}
+                      onChange={() =>
+                        setAppearance((current) => ({ ...current, presetId: option.id }))
+                      }
+                    />
+                    <CharacterPortrait
+                      appearance={{ ...appearance, presetId: option.id }}
+                      miniature
+                      decorative
+                    />
+                    <span className={styles.choiceLabel}>{option.label}</span>
+                    <SelectedCheck visible={checked} />
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+          <fieldset className={styles.choiceGroup} disabled={busy}>
+            <legend>Skin tone</legend>
+            <div className={styles.swatchChoices}>
+              {appearanceCatalog.skinTones.map((option, index) => {
+                const checked = appearance.skinToneId === option.id;
+                return (
+                  <label className={styles.swatchChoice} key={option.id}>
+                    <input
+                      type="radio"
+                      name="portrait-tone"
+                      value={option.id}
+                      checked={checked}
+                      onChange={() =>
+                        setAppearance((current) => ({ ...current, skinToneId: option.id }))
+                      }
+                    />
+                    <span className={styles.swatch} style={swatchStyle(skinSwatches[index]!)} />
+                    <span className={styles.choiceLabel}>{option.label}</span>
+                    <SelectedCheck visible={checked} />
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+          <fieldset className={styles.choiceGroup} disabled={busy}>
+            <legend>Hair style</legend>
+            <div className={styles.hairStyleChoices}>
+              {appearanceCatalog.hairStyles.map((option) => {
+                const checked = appearance.hairStyleId === option.id;
+                return (
+                  <label className={styles.hairStyleChoice} key={option.id}>
+                    <input
+                      type="radio"
+                      name="portrait-hair-style"
+                      value={option.id}
+                      checked={checked}
+                      onChange={() =>
+                        setAppearance((current) => ({ ...current, hairStyleId: option.id }))
+                      }
+                    />
+                    <CharacterPortrait
+                      appearance={{ ...appearance, hairStyleId: option.id }}
+                      miniature
+                      decorative
+                    />
+                    <span className={styles.choiceLabel}>{option.label}</span>
+                    <SelectedCheck visible={checked} />
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+          <fieldset className={styles.choiceGroup} disabled={busy}>
+            <legend>Hair color</legend>
+            <div className={styles.swatchChoices}>
+              {appearanceCatalog.hairColors.map((option, index) => {
+                const checked = appearance.hairColorId === option.id;
+                return (
+                  <label className={styles.swatchChoice} key={option.id}>
+                    <input
+                      type="radio"
+                      name="portrait-hair-color"
+                      value={option.id}
+                      checked={checked}
+                      onChange={() =>
+                        setAppearance((current) => ({ ...current, hairColorId: option.id }))
+                      }
+                    />
+                    <span className={styles.swatch} style={swatchStyle(hairSwatches[index]!)} />
+                    <span className={styles.choiceLabel}>{option.label}</span>
+                    <SelectedCheck visible={checked} />
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
           {message ? (
             <p className={styles.notice} role="alert">
               {message}

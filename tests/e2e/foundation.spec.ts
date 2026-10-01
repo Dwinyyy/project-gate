@@ -320,6 +320,126 @@ test('ordinary main-site sign-in stays in the player application', async ({ page
   await expect(page.getByText(/Character creation is currently unavailable/)).toBeVisible();
 });
 
+test('avatar choices use keyboard-operable labelled radios and submit their exact stable IDs', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await restorePlayerSession(page, 'password');
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill({
+      json: {
+        authUserId: playerUserId,
+        email: 'player@example.test',
+        emailVerified: true,
+        sessionId: playerSessionId,
+        aal: 'aal1',
+        applicationRole: 'player',
+      },
+    }),
+  );
+  await page.route('**/v1/me', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 3,
+        mode: 'onboarding',
+        character: null,
+        creation: { status: 'available', notBefore: null },
+      },
+    }),
+  );
+  let submitted: unknown;
+  await page.route('**/v1/characters', async (route) => {
+    submitted = route.request().postDataJSON();
+    await route.abort('failed');
+  });
+  await page.goto('/');
+  await page.getByLabel('Character alias').fill('Keyboard avatar');
+  await page.screenshot({ path: '.cache/avatar-refinement-320-light.png', fullPage: true });
+  const initialDescription = page.getByText(
+    'Oval face, light beige skin, cropped black hair, teal jacket.',
+  );
+  await initialDescription.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-320-live.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await initialDescription.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-390-live.png' });
+  await page.setViewportSize({ width: 320, height: 568 });
+
+  const portraits = page.getByRole('group', { name: 'Base portrait' });
+  await expect(portraits.getByRole('radio')).toHaveCount(4);
+  await portraits.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-320-portraits.png' });
+  await portraits.getByRole('radio', { name: /Oval face, teal jacket/ }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(portraits.getByRole('radio', { name: /Long face, violet jacket/ })).toBeChecked();
+
+  const tones = page.getByRole('group', { name: 'Skin tone' });
+  await expect(tones.getByRole('radio')).toHaveCount(6);
+  await tones.getByRole('radio', { name: 'Light beige' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect(tones.getByRole('radio', { name: 'Medium tan' })).toBeChecked();
+
+  const styles = page.getByRole('group', { name: 'Hair style' });
+  await expect(styles.getByRole('radio')).toHaveCount(5);
+  await styles.getByRole('radio', { name: 'Cropped hair' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect(styles.getByRole('radio', { name: 'Coiled hair' })).toBeChecked();
+
+  const colors = page.getByRole('group', { name: 'Hair color' });
+  await expect(colors.getByRole('radio')).toHaveCount(5);
+  await colors.getByRole('radio', { name: 'Black hair' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect(colors.getByRole('radio', { name: 'Auburn hair' })).toBeChecked();
+
+  await expect(
+    page.getByText('Long face, medium tan skin, coiled auburn hair, violet jacket.'),
+  ).toBeVisible();
+  await colors.getByRole('radio', { name: 'Auburn hair' }).focus();
+  await page.screenshot({ path: '.cache/avatar-refinement-320-focus.png', fullPage: true });
+  await tones.getByText('Dark brown', { exact: true }).click();
+  await expect(tones.getByRole('radio', { name: 'Dark brown' })).toBeChecked();
+  await tones.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-320-skin-dark.png' });
+  await styles.getByText('Shaved hair', { exact: true }).click();
+  await expect(styles.getByRole('radio', { name: 'Shaved hair' })).toBeChecked();
+  await expect(
+    page.getByText('Long face, dark brown skin, shaved auburn hair, violet jacket.'),
+  ).toBeVisible();
+  await page.screenshot({ path: '.cache/avatar-refinement-320-dark.png', fullPage: true });
+  await tones.getByText('Medium tan', { exact: true }).click();
+  await styles.getByText('Coiled hair', { exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await portraits.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-390-portraits.png' });
+  await tones.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-390-skin.png' });
+  await styles.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '.cache/avatar-refinement-390.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({ path: '.cache/avatar-refinement-1440.png', fullPage: true });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.getByRole('button', { name: 'Create character' }).click();
+  await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
+  expect(submitted).toEqual({
+    displayAlias: 'Keyboard avatar',
+    appearance: {
+      catalogVersion: 1,
+      presetId: 'portrait-02',
+      skinToneId: 'tone-03',
+      hairStyleId: 'coiled',
+      hairColorId: 'auburn',
+    },
+  });
+  await expect(
+    page.getByRole('group', { name: 'Base portrait' }).getByRole('radio').first(),
+  ).toBeEnabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test('player sees a dismissible warning when local sign-out lacks server confirmation', async ({
   page,
 }) => {
