@@ -329,6 +329,7 @@ export function App() {
   const characterState = useCharacterSession();
   const [drawerOwner, setDrawerOwner] = useState<string | null>(null);
   const bodyControl = useRef<HTMLButtonElement>(null);
+  const appFrame = useRef<HTMLDivElement>(null);
   const character = characterState.data?.character;
   const drawerOpen = !!character && drawerOwner !== null && drawerOwner === characterState.owner;
   const mainRef = useRef<HTMLElement>(null);
@@ -432,7 +433,7 @@ export function App() {
   return (
     <div className={styles.previewStage}>
       <p className={styles.previewCaption}>MOBILE APP PREVIEW · FOUNDATION</p>
-      <div className={styles.app}>
+      <div className={styles.app} ref={appFrame}>
         <a className={`hw-skip-link ${styles.skipLink}`} href="#main-content">
           Skip to content
         </a>
@@ -507,6 +508,7 @@ export function App() {
           <BodyStatusDrawer
             key={characterState.owner}
             character={character}
+            frameRef={appFrame}
             open={drawerOpen}
             onClose={() => setDrawerOwner(null)}
             returnFocus={() => bodyControl.current?.focus()}

@@ -70,12 +70,8 @@ export function CharacterSystem({ state }: { state: CharacterSession }) {
         token={state.token!}
         creation={data.creation}
         checking={query.isFetching}
-        refresh={async () => {
-          const result = await query.refetch();
-          return {
-            data: result.isSuccess && result.data?.owner === owner ? result.data.value : undefined,
-          };
-        }}
+        confirmation={state.confirmation}
+        refresh={state.refresh}
       />
     );
   }

@@ -96,6 +96,359 @@ async function characterSession(page: Page) {
   return storedSession;
 }
 
+test('temporary session validation outage quarantines an uncertain draft and preserves its exact retry after recovery', async ({
+  page,
+}) => {
+  await characterSession(page);
+  let validationUnavailable = false;
+  let reads = 0;
+  const requests: { key: string; body: unknown }[] = [];
+  await page.route('**/v1/auth/session', (route) =>
+    route.fulfill(
+      validationUnavailable
+        ? {
+            status: 503,
+            json: { error: { code: 'AUTH_SERVICE_UNAVAILABLE', requestId: 'fixture' } },
+          }
+        : {
+            json: {
+              authUserId: characterUserId,
+              email: 'player@example.test',
+              emailVerified: true,
+              sessionId: characterSessionId,
+              aal: 'aal1',
+              applicationRole: 'player',
+            },
+          },
+    ),
+  );
+  await page.route('**/v1/me', (route) => {
+    reads++;
+    return route.fulfill({
+      json: {
+        schemaVersion: 3,
+        mode: 'onboarding',
+        character: null,
+        creation: { status: 'available', notBefore: null },
+      },
+    });
+  });
+  await page.route('**/v1/characters', (route) => {
+    requests.push({
+      key: route.request().headers()['idempotency-key'] ?? '',
+      body: route.request().postDataJSON(),
+    });
+    return route.abort('failed');
+  });
+  await page.goto('/');
+  await page.getByLabel('Character alias').fill('  Quarantined  ');
+  await page.getByLabel('Hair style').selectOption('coiled');
+  await page.getByRole('button', { name: 'Create character', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
+  const previousReads = reads;
+  validationUnavailable = true;
+  await page.reload();
+  await expect(
+    page.getByRole('heading', { name: 'Account verification unavailable.' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Character alias')).toHaveCount(0);
+  expect(reads).toBe(previousReads);
+  validationUnavailable = false;
+  await page.getByRole('button', { name: 'Retry verification' }).click();
+  await expect(page.getByLabel('Character alias')).toHaveValue('Quarantined');
+  await page.getByRole('button', { name: 'Retry creation' }).click();
+  await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(requests[0]);
+});
+
+test('unavailable attempt storage retains memory through failed confirmation and token refresh, then clears on signout', async ({
+  page,
+  context,
+}) => {
+  const session = await characterSession(page);
+  await page.addInitScript(() => {
+    const write = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.startsWith('hunter-character-attempt:'))
+        throw new DOMException('Storage full', 'QuotaExceededError');
+      write.call(this, key, value);
+    };
+  });
+  let readUnavailable = false;
+  const requests: { key: string; body: unknown }[] = [];
+  await page.route('**/v1/me', (route) =>
+    route.fulfill(
+      readUnavailable
+        ? {
+            status: 503,
+            json: { error: { code: 'CHARACTER_SERVICE_UNAVAILABLE', requestId: 'fixture' } },
+          }
+        : {
+            json: {
+              schemaVersion: 3,
+              mode: 'onboarding',
+              character: null,
+              creation: { status: 'available', notBefore: null },
+            },
+          },
+    ),
+  );
+  await page.route('**/v1/characters', (route) => {
+    requests.push({
+      key: route.request().headers()['idempotency-key'] ?? '',
+      body: route.request().postDataJSON(),
+    });
+    if (requests.length === 1) readUnavailable = true;
+    return route.abort('failed');
+  });
+  await page.goto('/');
+  await page.getByLabel('Character alias').fill('  Memory continuity  ');
+  await page.getByLabel('Hair style').selectOption('curly');
+  await page.getByRole('button', { name: 'Create character', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Character service unavailable' })).toBeVisible();
+  readUnavailable = false;
+  await page.getByRole('button', { name: 'Retry character check' }).click();
+  await expect(page.getByLabel('Character alias')).toHaveValue('Memory continuity');
+  await expect(page.getByLabel('Hair style')).toHaveValue('curly');
+  await page.getByRole('button', { name: 'Retry creation' }).click();
+  await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
+  const refreshedToken = session.access_token.replace(
+    session.access_token.split('.')[1]!,
+    Buffer.from(
+      JSON.stringify({
+        sub: characterUserId,
+        session_id: characterSessionId,
+        exp: 2_000_000_001,
+        aal: 'aal1',
+        amr: [{ method: 'password', timestamp: 1_789_318_800 }],
+      }),
+    ).toString('base64url'),
+  );
+  await context.route('**/__memory-fixture', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<body>Session fixture</body>' }),
+  );
+  const other = await context.newPage();
+  await other.goto('/__memory-fixture');
+  const refreshedRead = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/v1/me') &&
+      response.request().headers().authorization === `Bearer ${refreshedToken}`,
+  );
+  await other.evaluate(
+    (value) => localStorage.setItem('sb-127-auth-token', JSON.stringify(value)),
+    { ...session, access_token: refreshedToken },
+  );
+  await refreshedRead;
+  await expect(page.getByLabel('Character alias')).toHaveValue('Memory continuity');
+  await page.getByRole('button', { name: 'Retry creation' }).click();
+  await expect(page.getByRole('button', { name: 'Retry creation' })).toBeEnabled();
+  expect(requests).toHaveLength(3);
+  expect(requests[1]).toEqual(requests[0]);
+  expect(requests[2]).toEqual(requests[0]);
+  await other.evaluate(() => localStorage.removeItem('sb-127-auth-token'));
+  await expect(page.getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
+  await other.evaluate(
+    (value) => localStorage.setItem('sb-127-auth-token', JSON.stringify(value)),
+    session,
+  );
+  await expect(page.getByLabel('Character alias')).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Retry creation' })).toHaveCount(0);
+});
+
+test('returning from Map during an unresolved POST confirms server state before any retry or edited submission', async ({
+  page,
+}) => {
+  await characterSession(page);
+  let reads = 0;
+  let posts = 0;
+  let startedPost: () => void = () => {};
+  let releasePost: () => void = () => {};
+  let releaseRead: () => void = () => {};
+  const postStarted = new Promise<void>((resolve) => {
+    startedPost = resolve;
+  });
+  const heldPost = new Promise<void>((resolve) => {
+    releasePost = resolve;
+  });
+  const heldRead = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  await page.route('**/v1/me', async (route) => {
+    reads++;
+    if (reads > 1) await heldRead;
+    await route
+      .fulfill({
+        json: {
+          schemaVersion: 3,
+          mode: posts ? 'active' : 'onboarding',
+          character: posts ? characterFixture('Committed before abort') : null,
+          creation: { status: posts ? 'occupied' : 'available', notBefore: null },
+        },
+      })
+      .catch(() => {});
+  });
+  await page.route('**/v1/characters', async (route) => {
+    posts++;
+    startedPost();
+    await heldPost;
+    await route
+      .fulfill({
+        status: 201,
+        json: {
+          characterId,
+          operationId: route.request().headers()['idempotency-key'],
+          createdAt: '2026-09-28T12:00:00.000Z',
+        },
+      })
+      .catch(() => {});
+  });
+  await page.goto('/');
+  await page.getByLabel('Character alias').fill('Committed before abort');
+  await page.getByRole('button', { name: 'Create character', exact: true }).click();
+  await postStarted;
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'Map', exact: true })
+    .click();
+  await page
+    .getByRole('navigation', { name: 'Main navigation' })
+    .getByRole('link', { name: 'System', exact: true })
+    .click();
+  // StrictMode can cancel and restart the confirmation read. Every read after
+  // the initial availability response stays held, so none can unlock creation.
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+  const submit = page.getByRole('button', { name: /^(Retry creation|Create character)$/ });
+  await expect(submit).toBeDisabled();
+  await page.getByLabel('Character alias').fill('Edited while confirming');
+  await expect(page.getByRole('button', { name: 'Create character', exact: true })).toBeDisabled();
+  expect(posts).toBe(1);
+  releaseRead();
+  await expect(
+    page.getByRole('heading', { name: 'Committed before abort', level: 1 }),
+  ).toBeVisible();
+  expect(posts).toBe(1);
+  releasePost();
+});
+
+test('portrait and skin options describe visible traits while preserving the catalog IDs', async ({
+  page,
+}) => {
+  await characterSession(page);
+  await page.route('**/v1/me', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 3,
+        mode: 'onboarding',
+        character: null,
+        creation: { status: 'available', notBefore: null },
+      },
+    }),
+  );
+  await page.goto('/');
+  await expect(page.getByLabel('Base portrait').locator('option')).toHaveText([
+    'Oval face, teal jacket',
+    'Long face, violet jacket',
+    'Broad face, blue jacket',
+    'Tapered face, brown jacket',
+  ]);
+  await expect(page.getByLabel('Skin tone', { exact: true }).locator('option')).toHaveText([
+    'Light beige',
+    'Warm beige',
+    'Medium tan',
+    'Warm brown',
+    'Deep brown',
+    'Dark brown',
+  ]);
+  expect(
+    await page
+      .getByLabel('Base portrait')
+      .locator('option')
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+  ).toEqual(['portrait-01', 'portrait-02', 'portrait-03', 'portrait-04']);
+  expect(
+    await page
+      .getByLabel('Skin tone', { exact: true })
+      .locator('option')
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
+  ).toEqual(['tone-01', 'tone-02', 'tone-03', 'tone-04', 'tone-05', 'tone-06']);
+  await page.getByLabel('Base portrait').selectOption('portrait-03');
+  await page.getByLabel('Skin tone', { exact: true }).selectOption('tone-05');
+  await expect(
+    page.getByRole('img', {
+      name: 'Portrait: Broad face, blue jacket, Deep brown, cropped hair, black hair',
+    }),
+  ).toBeVisible();
+});
+
+test('desktop drawer belongs to the centered app frame', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await characterSession(page);
+  await page.route('**/v1/me', (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 3,
+        mode: 'active',
+        character: characterFixture('Framed'),
+        creation: { status: 'occupied', notBefore: null },
+      },
+    }),
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Body status', exact: true }).click();
+  const frame = await page.getByRole('banner').evaluate((element) => {
+    const bounds = element.parentElement!.getBoundingClientRect();
+    return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  });
+  const drawer = (await page.getByRole('dialog', { name: 'Body status' }).boundingBox())!;
+  expect(drawer.x).toBeGreaterThanOrEqual(frame.x - 1);
+  expect(drawer.x + drawer.width).toBeLessThanOrEqual(frame.x + frame.width + 1);
+  expect(Math.abs(drawer.y + drawer.height - frame.y - frame.height)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: 'test-results/character-drawer-framed-1440-1000.png' });
+});
+
+for (const viewport of [
+  { width: 320, height: 568 },
+  { width: 390, height: 420 },
+]) {
+  test(`touch Close stays visible after all body rows are read at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await characterSession(page);
+    await page.route('**/v1/me', (route) =>
+      route.fulfill({
+        json: {
+          schemaVersion: 3,
+          mode: 'active',
+          character: characterFixture('Scroll and close'),
+          creation: { status: 'occupied', notBefore: null },
+        },
+      }),
+    );
+    await page.goto('/');
+    const entry = page.getByRole('button', { name: 'Body status', exact: true });
+    await entry.click();
+    const drawer = page.getByRole('dialog', { name: 'Body status' });
+    await drawer.getByText(/Resource measurements will appear/).scrollIntoViewIfNeeded();
+    const close = drawer.getByRole('button', { name: 'Close body status' });
+    const closeBounds = (await close.boundingBox())!;
+    const drawerBounds = (await drawer.boundingBox())!;
+    expect(closeBounds.y).toBeGreaterThanOrEqual(drawerBounds.y);
+    expect(closeBounds.y + closeBounds.height).toBeLessThanOrEqual(
+      drawerBounds.y + drawerBounds.height,
+    );
+    expect(closeBounds.height).toBeGreaterThanOrEqual(44);
+    await expect(close).toBeInViewport();
+    await page.screenshot({
+      path: `test-results/character-drawer-scrolled-${viewport.width}-${viewport.height}.png`,
+    });
+    await close.click();
+    await expect(drawer).not.toBeVisible();
+    await expect(entry).toBeFocused();
+  });
+}
+
 test('allowlisted player creates one visual identity and refresh recovers confirmed System and body status', async ({
   page,
 }) => {

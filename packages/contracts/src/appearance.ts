@@ -4,18 +4,18 @@ export const appearanceCatalogVersion = 1 as const;
 
 export const appearanceCatalog = {
   presets: [
-    { id: 'portrait-01', label: 'Portrait one' },
-    { id: 'portrait-02', label: 'Portrait two' },
-    { id: 'portrait-03', label: 'Portrait three' },
-    { id: 'portrait-04', label: 'Portrait four' },
+    { id: 'portrait-01', label: 'Oval face, teal jacket' },
+    { id: 'portrait-02', label: 'Long face, violet jacket' },
+    { id: 'portrait-03', label: 'Broad face, blue jacket' },
+    { id: 'portrait-04', label: 'Tapered face, brown jacket' },
   ],
   skinTones: [
-    { id: 'tone-01', label: 'Skin tone one' },
-    { id: 'tone-02', label: 'Skin tone two' },
-    { id: 'tone-03', label: 'Skin tone three' },
-    { id: 'tone-04', label: 'Skin tone four' },
-    { id: 'tone-05', label: 'Skin tone five' },
-    { id: 'tone-06', label: 'Skin tone six' },
+    { id: 'tone-01', label: 'Light beige' },
+    { id: 'tone-02', label: 'Warm beige' },
+    { id: 'tone-03', label: 'Medium tan' },
+    { id: 'tone-04', label: 'Warm brown' },
+    { id: 'tone-05', label: 'Deep brown' },
+    { id: 'tone-06', label: 'Dark brown' },
   ],
   hairStyles: [
     { id: 'cropped', label: 'Cropped hair' },

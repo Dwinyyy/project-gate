@@ -40,7 +40,7 @@ export function CharacterPortrait({
     <svg
       className={compact ? styles.portraitCompact : styles.portrait}
       role="img"
-      aria-label={`${preset}, ${tone}, ${hair.toLowerCase()}, ${color.toLowerCase()}`}
+      aria-label={`Portrait: ${preset}, ${tone}, ${hair.toLowerCase()}, ${color.toLowerCase()}`}
       viewBox="0 0 180 220"
       xmlns="http://www.w3.org/2000/svg"
     >

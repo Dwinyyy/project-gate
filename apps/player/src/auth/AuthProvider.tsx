@@ -16,6 +16,7 @@ import {
   type AuthController,
   type AuthSnapshot,
 } from '@hunter-world/client';
+import { characterAttemptKey, clearCharacterAttempts } from '../character/characterAttempts';
 
 type SelfSession = Awaited<ReturnType<typeof getSelfSession>>;
 
@@ -48,18 +49,6 @@ const AccountContext = createContext<AccountContextValue>({
   validationGeneration: 0,
   validationError: null,
 });
-
-function clearCharacterAttempts(retainKey?: string) {
-  try {
-    for (const key of Object.keys(sessionStorage)) {
-      if (key.startsWith('hunter-character-attempt:') && key !== retainKey) {
-        sessionStorage.removeItem(key);
-      }
-    }
-  } catch {
-    /* Storage may be unavailable; private state is still isolated in memory. */
-  }
-}
 
 interface SharedBrowserController {
   consumers: number;
@@ -170,14 +159,17 @@ function ConnectedAccountProvider({
         // A replacement session, operator routing, or invalid session retains none.
         clearCharacterAttempts(
           session.applicationRole === 'player'
-            ? `hunter-character-attempt:${session.authUserId}:${session.sessionId}`
+            ? characterAttemptKey(`${session.authUserId}:${session.sessionId}`)
             : undefined,
         );
         setValidated((current) => ({ ...current, token, session, error: null }));
       })
       .catch((error: unknown) => {
         if (!active) return;
-        clearCharacterAttempts();
+        // A temporary provider/network outage is not proof of invalid authority
+        // or of the creation outcome. Keep the draft quarantined until validation.
+        if (error instanceof AuthActionError && error.code !== 'unavailable')
+          clearCharacterAttempts();
         setValidated((current) => ({
           ...current,
           token,

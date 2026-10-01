@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CharacterActionError, createMyCharacter } from '@hunter-world/client';
 import {
   appearanceCatalog,
@@ -9,8 +9,15 @@ import {
 } from '@hunter-world/contracts';
 import { CharacterPortrait } from './CharacterPortrait';
 import styles from './Character.module.css';
+import {
+  characterAttemptKey,
+  readCharacterAttempt,
+  requireCharacterConfirmation,
+  storeCharacterAttempt,
+  subscribeCharacterAttempts,
+  type AttemptConfirmation,
+} from './characterAttempts';
 
-type Attempt = { draft: string; operationId: string; outcome: 'uncertain' | 'sending' };
 type Refresh = () => Promise<{ data: MeResponse | undefined }>;
 
 const initialAppearance: AppearanceChoice = {
@@ -20,47 +27,6 @@ const initialAppearance: AppearanceChoice = {
   hairStyleId: appearanceCatalog.hairStyles[0].id,
   hairColorId: appearanceCatalog.hairColors[0].id,
 };
-
-function readAttempt(key: string): Attempt | null {
-  try {
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return null;
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== 'object') return null;
-    const record = value as Record<string, unknown>;
-    if (
-      typeof record.draft !== 'string' ||
-      typeof record.operationId !== 'string' ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        record.operationId,
-      )
-    )
-      return null;
-    const draft: CreateCharacterInput = JSON.parse(record.draft);
-    if (
-      typeof draft.displayAlias !== 'string' ||
-      !draft.appearance ||
-      draft.appearance.catalogVersion !== 1 ||
-      !appearanceCatalog.presets.some((option) => option.id === draft.appearance.presetId) ||
-      !appearanceCatalog.skinTones.some((option) => option.id === draft.appearance.skinToneId) ||
-      !appearanceCatalog.hairStyles.some((option) => option.id === draft.appearance.hairStyleId) ||
-      !appearanceCatalog.hairColors.some((option) => option.id === draft.appearance.hairColorId)
-    )
-      return null;
-    return { draft: record.draft, operationId: record.operationId, outcome: 'uncertain' };
-  } catch {
-    return null;
-  }
-}
-
-function storeAttempt(key: string, attempt: Attempt | null) {
-  try {
-    if (attempt) sessionStorage.setItem(key, JSON.stringify(attempt));
-    else sessionStorage.removeItem(key);
-  } catch {
-    /* In-memory retry still works when browser storage is unavailable. */
-  }
-}
 
 function unavailableMessage(status: MeResponse['creation']['status'], notBefore: string | null) {
   switch (status) {
@@ -83,15 +49,21 @@ export function CharacterOnboarding({
   creation,
   refresh,
   checking,
+  confirmation,
 }: {
   owner: string;
   token: string;
   creation: MeResponse['creation'];
   refresh: Refresh;
   checking: boolean;
+  confirmation: AttemptConfirmation | null;
 }) {
-  const storageKey = `hunter-character-attempt:${owner.split(':').slice(0, 2).join(':')}`;
-  const [attempt, setAttempt] = useState<Attempt | null>(() => readAttempt(storageKey));
+  const storageKey = characterAttemptKey(owner);
+  const attempt = useSyncExternalStore(
+    subscribeCharacterAttempts,
+    () => readCharacterAttempt(storageKey),
+    () => null,
+  );
   const [alias, setAlias] = useState(() =>
     attempt ? (JSON.parse(attempt.draft) as CreateCharacterInput).displayAlias : '',
   );
@@ -110,18 +82,28 @@ export function CharacterOnboarding({
     return () => {
       mounted.current = false;
       abort.current?.abort();
+      requireCharacterConfirmation(storageKey);
     };
-  }, []);
+  }, [storageKey]);
 
   const normalizedAlias = alias.normalize('NFC').trim();
   const input: CreateCharacterInput = { displayAlias: normalizedAlias, appearance };
   const draft = JSON.stringify(input);
-  const exactRetry = attempt?.draft === draft && attempt.outcome === 'uncertain';
+  const exactRetry = attempt?.draft === draft;
+  const requiresConfirmation =
+    !!attempt &&
+    (confirmation?.operationId !== attempt.operationId ||
+      confirmation.confirmationVersion !== attempt.confirmationVersion);
   const available = creation.status === 'available';
+  useEffect(() => {
+    if (requiresConfirmation && !inFlight.current && !busy && !checking && !requiresSignIn)
+      void refresh();
+  }, [requiresConfirmation, busy, checking, requiresSignIn, refresh]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!available || checking || requiresSignIn || inFlight.current) return;
+    if (!available || checking || requiresConfirmation || requiresSignIn || inFlight.current)
+      return;
     if (
       Array.from(normalizedAlias).length < 1 ||
       Array.from(normalizedAlias).length > 40 ||
@@ -137,12 +119,10 @@ export function CharacterOnboarding({
       return;
     }
     const operationId = exactRetry ? attempt.operationId : crypto.randomUUID();
-    const next: Attempt = { draft, operationId, outcome: 'sending' };
-    storeAttempt(storageKey, next);
-    setAttempt(next);
+    inFlight.current = true;
+    storeCharacterAttempt(storageKey, { draft, operationId });
     setMessage(null);
     setBusy(true);
-    inFlight.current = true;
     const controller = new AbortController();
     abort.current = controller;
     try {
@@ -150,9 +130,8 @@ export function CharacterOnboarding({
       const confirmed = await refresh();
       if (!mounted.current) return;
       if (confirmed.data?.character) {
-        storeAttempt(storageKey, null);
+        storeCharacterAttempt(storageKey, null);
       } else {
-        setAttempt({ ...next, outcome: 'uncertain' });
         setMessage(
           'Creation was received, but the current character state could not be confirmed. Check state before retrying.',
         );
@@ -164,8 +143,7 @@ export function CharacterOnboarding({
         code === 'AUTH_REQUIRED' ||
         (error instanceof CharacterActionError && error.status === 401)
       ) {
-        storeAttempt(storageKey, null);
-        setAttempt(null);
+        storeCharacterAttempt(storageKey, null);
         setRequiresSignIn(true);
         setMessage('Your session has expired. Sign out and sign in again.');
       } else if (
@@ -177,8 +155,7 @@ export function CharacterOnboarding({
           'EMAIL_VERIFICATION_REQUIRED',
         ].includes(code)
       ) {
-        storeAttempt(storageKey, null);
-        setAttempt(null);
+        storeCharacterAttempt(storageKey, null);
         setRequiresSignIn(true);
         setMessage(
           'This session cannot create a player character. Sign out and sign in with an eligible player account.',
@@ -189,8 +166,7 @@ export function CharacterOnboarding({
         code === 'CHARACTER_SLOT_OCCUPIED' ||
         code === 'CHARACTER_CREATION_COOLDOWN'
       ) {
-        storeAttempt(storageKey, null);
-        setAttempt(null);
+        storeCharacterAttempt(storageKey, null);
         await refresh();
         if (mounted.current)
           setMessage(
@@ -203,8 +179,7 @@ export function CharacterOnboarding({
                   : 'A new character cannot be created yet. Check the current eligibility time.',
           );
       } else if (code === 'OPERATION_CONFLICT' || code === 'INVALID_REQUEST') {
-        storeAttempt(storageKey, null);
-        setAttempt(null);
+        storeCharacterAttempt(storageKey, null);
         setMessage(
           code === 'OPERATION_CONFLICT'
             ? 'This request identity conflicts with an earlier draft. Check current state before starting a new request.'
@@ -215,7 +190,6 @@ export function CharacterOnboarding({
         // A transport failure does not prove the transaction failed. Read server state first.
         await refresh();
         if (mounted.current) {
-          setAttempt({ ...next, outcome: 'uncertain' });
           setMessage(
             'The result could not be confirmed. Check your connection, then explicitly retry this same appearance and alias.',
           );
@@ -337,7 +311,7 @@ export function CharacterOnboarding({
           <button
             className={styles.primaryButton}
             type="submit"
-            disabled={busy || checking || requiresSignIn}
+            disabled={busy || checking || requiresConfirmation || requiresSignIn}
           >
             {busy ? 'Checking creation…' : exactRetry ? 'Retry creation' : 'Create character'}
           </button>
