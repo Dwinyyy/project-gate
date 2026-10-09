@@ -18,6 +18,8 @@ The private `/v1/me` response advances to schema version 2 with a coarse `onboar
 
 Future writers of restriction, ownership, life, or revision must follow the agreed lock order and advance revisions. Future command domains add named operations and keep their own authoritative checks in the committing transaction. The character feature control remains disabled in managed development; no moderation write path, support UI, rescue mechanic, gameplay route, or playable prototype is introduced here.
 
+Task 2.6 adds the focused disclosure authority described in [ADR 0015](0015-civilian-profile-disclosure.md). The established `character.profile.update` guard now acquires account and owned character `FOR UPDATE` on their first acquisition, preserving its existing denied-state policy. Disclosure mutations use their separate transaction-local guard after receipt lookup; they never call a shared-lock character guard before obtaining write authority. Account records and public-content reads retain shared locks. This removes share-to-update upgrades without granting lifecycle, ownership, restriction or rescue mutation privileges.
+
 ## Alternatives and consequences
 
 - Route middleware alone cannot prevent a restriction or death from committing after the middleware check and before the action. Transaction-scoped row locks and rechecks close that race.

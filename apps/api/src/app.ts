@@ -15,8 +15,9 @@ import {
   type SystemStatus,
 } from '@hunter-world/contracts';
 import type { AuthVerifier } from '@hunter-world/server';
-import type { CharacterStore, OperatorAccessStore } from '@hunter-world/database';
+import type { CharacterStore, OperatorAccessStore, ProfileStore } from '@hunter-world/database';
 import { registerCharacterRoutes } from './character-routes.js';
+import { registerProfileRoutes } from './profile-routes.js';
 import { verifyStandardIdentity } from './identity.js';
 
 export interface ApiOptions {
@@ -25,6 +26,7 @@ export interface ApiOptions {
   auth?: { publicConfig: AuthConfig; verifier: AuthVerifier };
   operators?: OperatorAccessStore;
   characters?: CharacterStore;
+  profiles?: ProfileStore;
   revision?: string;
 }
 
@@ -102,6 +104,10 @@ export function buildApp(options: ApiOptions = {}) {
   registerCharacterRoutes(app, {
     ...(options.auth ? { auth: options.auth.verifier } : {}),
     ...(options.characters ? { characters: options.characters } : {}),
+  });
+  registerProfileRoutes(app, {
+    ...(options.auth ? { auth: options.auth.verifier } : {}),
+    ...(options.profiles ? { profiles: options.profiles } : {}),
   });
   app.get(
     '/v1/auth/session',

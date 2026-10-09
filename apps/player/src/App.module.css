@@ -67,6 +67,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
+  gap: 5px;
 }
 .headerActions a {
   display: inline-flex;
@@ -81,10 +82,19 @@
   color: var(--hw-muted);
   font-size: 12px;
   text-decoration: none;
+  flex-shrink: 0;
 }
 .headerActions a:hover,
 .headerActions a[aria-current='page'] {
   color: var(--hw-accent);
+}
+.headerActions .systemIdLink {
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+.systemIdLink svg {
+  width: 18px;
+  height: 18px;
 }
 .main {
   min-height: 0;
@@ -832,6 +842,7 @@
   min-height: 44px;
 }
 .accountControl {
+  flex: 0 0 auto;
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -846,6 +857,7 @@
   white-space: nowrap;
 }
 .accountControl button {
+  min-width: 44px;
   min-height: 44px;
   padding: 7px 10px;
   border: 1px solid var(--hw-border);
@@ -858,6 +870,31 @@
 .accountControl button:hover:not(:disabled) {
   border-color: #4b796b;
   color: var(--hw-accent);
+}
+
+@media (max-width: 359px) {
+  .topbar {
+    gap: 8px;
+  }
+
+  .brand {
+    flex: 0 0 44px;
+    justify-content: flex-start;
+  }
+
+  .brand > span {
+    display: none;
+  }
+
+  .headerActions {
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .headerActions > button {
+    flex-shrink: 0;
+    margin-right: 0;
+  }
 }
 
 .desktopBreak,

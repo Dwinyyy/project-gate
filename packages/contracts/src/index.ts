@@ -1,4 +1,5 @@
 import type { FromSchema } from 'json-schema-to-ts';
+export * from './profile.js';
 
 export {
   appearanceCatalogVersion,

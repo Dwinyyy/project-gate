@@ -17,6 +17,11 @@ import {
   type AuthSnapshot,
 } from '@hunter-world/client';
 import { characterAttemptKey, clearCharacterAttempts } from '../character/characterAttempts';
+import {
+  useProfileInvitation,
+  useProfileInvitationMemory,
+} from '../profile/ProfileInvitationProvider';
+import { clearProfileAttempts, quarantineProfileAttempts } from '../profile/profileAttempts';
 
 type SelfSession = Awaited<ReturnType<typeof getSelfSession>>;
 
@@ -103,6 +108,11 @@ function ConnectedAccountProvider({
     controller.getSnapshot,
   );
   const queryClient = useQueryClient();
+  const invitation = useProfileInvitationMemory();
+  const { token: invitationToken } = useProfileInvitation();
+  const { clear: clearInvitation, bindReader } = invitation;
+  const establishedProfileReader = useRef(false);
+  const previousProfileAuthUser = useRef<string | null>(null);
   const previousAuthUser = useRef<string | null>(null);
   const [validated, setValidated] = useState<{
     token: string | null;
@@ -119,12 +129,31 @@ function ConnectedAccountProvider({
     let active = true;
     void queryClient.cancelQueries({ queryKey: ['character', 'private'] });
     queryClient.removeQueries({ queryKey: ['character', 'private'] });
+    void queryClient.cancelQueries({ queryKey: ['profile'] });
+    queryClient.removeQueries({ queryKey: ['profile'] });
+    quarantineProfileAttempts();
+    if (establishedProfileReader.current || invitation.getSnapshot().boundReader) clearInvitation();
+    if (auth.phase === 'recovery' || auth.phase === 'restricted') {
+      clearInvitation();
+      clearProfileAttempts();
+    }
     const currentUser = auth.phase === 'authenticated' ? (auth.user?.id ?? null) : null;
     if (previousAuthUser.current && previousAuthUser.current !== currentUser) {
       clearCharacterAttempts();
+      clearInvitation();
     }
+    if (
+      auth.phase === 'anonymous' ||
+      (currentUser &&
+        previousProfileAuthUser.current &&
+        currentUser !== previousProfileAuthUser.current)
+    )
+      clearProfileAttempts();
+    if (currentUser) previousProfileAuthUser.current = currentUser;
+    else if (auth.phase === 'anonymous') previousProfileAuthUser.current = null;
     previousAuthUser.current = currentUser;
     if (!auth.accessToken || auth.phase !== 'authenticated') {
+      establishedProfileReader.current = false;
       setValidated((current) => ({
         token: null,
         session: null,
@@ -133,6 +162,7 @@ function ConnectedAccountProvider({
       }));
       return () => {
         active = false;
+        if (invitation.getSnapshot().boundReader) clearInvitation();
       };
     }
     const token = auth.accessToken;
@@ -147,6 +177,8 @@ function ConnectedAccountProvider({
         if (!active) return;
         if (session.authUserId !== auth.user?.id) {
           clearCharacterAttempts();
+          clearInvitation();
+          clearProfileAttempts();
           setValidated((current) => ({
             ...current,
             token,
@@ -162,6 +194,17 @@ function ConnectedAccountProvider({
             ? characterAttemptKey(`${session.authUserId}:${session.sessionId}`)
             : undefined,
         );
+        const profileReader =
+          session.applicationRole === 'player' && session.emailVerified && session.sessionId
+            ? `${session.authUserId}:${session.sessionId}`
+            : null;
+        clearProfileAttempts(profileReader ?? undefined);
+        if (profileReader) {
+          bindReader(profileReader);
+          establishedProfileReader.current = true;
+        } else {
+          clearInvitation();
+        }
         setValidated((current) => ({ ...current, token, session, error: null }));
       })
       .catch((error: unknown) => {
@@ -170,6 +213,10 @@ function ConnectedAccountProvider({
         // or of the creation outcome. Keep the draft quarantined until validation.
         if (error instanceof AuthActionError && error.code !== 'unavailable')
           clearCharacterAttempts();
+        if (error instanceof AuthActionError && error.code !== 'unavailable') {
+          clearProfileAttempts();
+          clearInvitation();
+        }
         setValidated((current) => ({
           ...current,
           token,
@@ -182,8 +229,18 @@ function ConnectedAccountProvider({
       });
     return () => {
       active = false;
+      if (establishedProfileReader.current || invitation.getSnapshot().boundReader)
+        clearInvitation();
     };
-  }, [auth.accessToken, auth.phase, auth.user?.id, queryClient]);
+  }, [
+    auth.accessToken,
+    auth.phase,
+    auth.user?.id,
+    queryClient,
+    clearInvitation,
+    bindReader,
+    invitation,
+  ]);
 
   const validation =
     !auth.accessToken || auth.phase !== 'authenticated'
@@ -193,6 +250,25 @@ function ConnectedAccountProvider({
         : validated.session
           ? 'valid'
           : 'invalid';
+  useEffect(() => {
+    if (!invitationToken || validation !== 'valid' || validated.token !== auth.accessToken) return;
+    const reader = validated.session;
+    if (
+      reader?.applicationRole === 'player' &&
+      reader.emailVerified &&
+      reader.sessionId &&
+      reader.authUserId === auth.user?.id
+    )
+      bindReader(`${reader.authUserId}:${reader.sessionId}`);
+  }, [
+    invitationToken,
+    validation,
+    validated.token,
+    validated.session,
+    auth.accessToken,
+    auth.user?.id,
+    bindReader,
+  ]);
   const value = useMemo<AccountContextValue>(
     () => ({
       controller,

@@ -5,4 +5,9 @@ export const config: VercelConfig = {
   buildCommand: 'pnpm run build',
   outputDirectory: 'dist',
   rewrites: [routes.rewrite('/:path*', '/index.html')],
+  git: {
+    deploymentEnabled: {
+      'codex/task26-ci-verification': false,
+    },
+  },
 };

@@ -103,7 +103,7 @@ export async function authorizeCharacterOperation(
 
   const account = await client.query<AccountRow>(
     `SELECT id, access_state FROM game.accounts WHERE auth_user_id = $1::uuid
-     ${operation === 'character.create' ? 'FOR UPDATE' : 'FOR SHARE'}`,
+     ${operation === 'character.create' || operation === 'character.profile.update' ? 'FOR UPDATE' : 'FOR SHARE'}`,
     [input.authUserId],
   );
   const accountRow = account.rows[0];
@@ -135,7 +135,7 @@ export async function authorizeCharacterOperation(
   }
 
   const character = await client.query<CharacterRow>(
-    'SELECT life_state, revision FROM game.characters WHERE id = $1::uuid AND account_id = $2::uuid FOR SHARE',
+    `SELECT life_state, revision FROM game.characters WHERE id = $1::uuid AND account_id = $2::uuid ${operation === 'character.profile.update' ? 'FOR UPDATE' : 'FOR SHARE'}`,
     [input.characterId, accountId],
   );
   const characterRow = character.rows[0];

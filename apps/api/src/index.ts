@@ -3,6 +3,7 @@ import {
   createCharacterStore,
   createDatabase,
   createOperatorAccessStore,
+  createProfileStore,
 } from '@hunter-world/database';
 import { createSupabaseAuthVerifier, databaseTls, parseEnvironment } from '@hunter-world/server';
 import { buildApp } from './app.js';
@@ -35,6 +36,7 @@ async function main() {
     ...(auth ? { auth } : {}),
     ...(database ? { operators: createOperatorAccessStore(database.pool) } : {}),
     ...(database ? { characters: createCharacterStore(database.pool) } : {}),
+    ...(database ? { profiles: createProfileStore(database.pool) } : {}),
   });
   if (database) app.addHook('onClose', () => database.close());
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {

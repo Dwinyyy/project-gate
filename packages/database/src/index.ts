@@ -1,5 +1,22 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
+export {
+  createProfileStore,
+  type ProfileStore,
+  type ProfileStoreResult,
+  type ProfileFailureKind,
+} from './profile-disclosure.js';
+export {
+  lockProfileActor,
+  authorizeLockedProfileAction,
+  type ProfileOperation,
+  type ProfileActionInput,
+  type ProfileActorLockOptions,
+  type LockedProfileActor,
+  type LockedProfileActorResult,
+  type LockedProfileCharacter,
+  type ProfileAuthorityResult,
+} from './profile-authority.js';
 
 export {
   authorizeCharacterOperation,

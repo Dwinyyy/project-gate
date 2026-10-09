@@ -1,4 +1,14 @@
 import type { SystemStatus } from '@hunter-world/contracts';
+export {
+  ProfileActionError,
+  getMyProfile,
+  updateMyProfile,
+  issueMyProfileInvitation,
+  revokeMyProfileInvitation,
+  withdrawMyProfileDisclosure,
+  getPublicProfile,
+  resolveProfileInvitation,
+} from './profile.js';
 
 export {
   AuthActionError,

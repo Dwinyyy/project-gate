@@ -5,6 +5,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@hunter-world/ui/styles.css';
 import { App } from './App';
 import { AuthProvider } from './auth/AuthProvider';
+import { ProfileInvitationProvider } from './profile/ProfileInvitationProvider';
+import {
+  captureInitialProfileInvitation,
+  createProfileInvitationMemory,
+} from './profile/profileInvitation';
+
+const invitationMemory = createProfileInvitationMemory(
+  captureInitialProfileInvitation(window.location, window.history),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -16,11 +25,13 @@ if (!root) throw new Error('The application root is missing.');
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </BrowserRouter>
+      <ProfileInvitationProvider memory={invitationMemory}>
+        <BrowserRouter>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </BrowserRouter>
+      </ProfileInvitationProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

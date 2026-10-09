@@ -6,6 +6,7 @@ import { execFile, fork, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { prepareOperatorStatusChange } from '../../scripts/lib/operator-provisioning.js';
+import { registerProfileDisclosureTests } from './profile-disclosure-cases.js';
 import {
   authorizeCharacterOperation,
   type CharacterAuthorityInput,
@@ -39,6 +40,12 @@ const runtimeUrl = new URL(connectionString);
 runtimeUrl.username = 'hunter_runtime';
 runtimeUrl.password = randomBytes(24).toString('hex');
 const database = createDatabase({ connectionString: runtimeUrl.toString() });
+registerProfileDisclosureTests({
+  owner,
+  runtime: database.pool,
+  createCandidate: characterCandidate,
+  removeCandidate: removeCharacterCandidate,
+});
 
 test('operational functions have pinned trusted search paths', async () => {
   const functions = await owner.query<{ proname: string; proconfig: string[] | null }>(
@@ -601,7 +608,7 @@ test('public roles cannot read game identity and runtime cannot change protected
       ['UPDATE game.characters SET account_id = $1 WHERE id = $2', [randomUUID(), characterId]],
       ["UPDATE game.characters SET life_state = 'dead' WHERE id = $1", [characterId]],
       ["UPDATE game.characters SET awakening_state = 'awakened' WHERE id = $1", [characterId]],
-      ["UPDATE game.characters SET profile_visibility = 'public' WHERE id = $1", [characterId]],
+      ["UPDATE game.characters SET presence_state = 'active' WHERE id = $1", [characterId]],
       ['UPDATE ops.feature_controls SET characters = true WHERE singleton = true', []],
       ['DELETE FROM game.characters WHERE id = $1', [characterId]],
       ['DELETE FROM game.accounts WHERE id = $1', [accountId]],
@@ -1270,6 +1277,25 @@ async function setPilotStatus(email: string, enabled: boolean): Promise<void> {
 }
 
 async function removeCharacterCandidate(id: string): Promise<void> {
+  const cleanup = await owner.connect();
+  try {
+    await cleanup.query('BEGIN');
+    await cleanup.query("SET LOCAL session_replication_role = 'replica'");
+    await cleanup.query(
+      'DELETE FROM game.profile_operation_receipts WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id=$1)',
+      [id],
+    );
+    await cleanup.query(
+      'DELETE FROM game.profile_invitations WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id=$1)',
+      [id],
+    );
+    await cleanup.query('COMMIT');
+  } catch (error) {
+    await cleanup.query('ROLLBACK');
+    throw error;
+  } finally {
+    cleanup.release();
+  }
   await owner.query(
     'DELETE FROM game.character_creation_receipts WHERE account_id IN (SELECT id FROM game.accounts WHERE auth_user_id = $1)',
     [id],

@@ -159,8 +159,8 @@ export function CharacterSystem({ state }: { state: CharacterSession }) {
       <section className={styles.modulePanel} aria-labelledby="future-modules">
         <h2 id="future-modules">System modules</h2>
         <p>
-          World activity, inventory and profile controls will appear here when their authoritative
-          services are ready.
+          World activity and inventory will appear here when their authoritative services are ready.
+          Profile controls are available from System ID.
         </p>
         <Link to="/map">Explore available screens</Link>
       </section>

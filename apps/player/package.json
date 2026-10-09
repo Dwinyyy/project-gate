@@ -7,11 +7,15 @@
     "build": "tsx ../../scripts/build-player-with-operator.ts --app-root"
   },
   "dependencies": {
+    "@hunter-world/client": "workspace:*",
+    "@hunter-world/ui": "workspace:*",
+    "@tanstack/react-query": "5.102.8",
+    "qrcode": "1.5.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "react-router-dom": "7.18.3",
-    "@tanstack/react-query": "5.102.8",
-    "@hunter-world/client": "workspace:*",
-    "@hunter-world/ui": "workspace:*"
+    "react-router-dom": "7.18.3"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.6"
   }
 }

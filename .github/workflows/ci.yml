@@ -31,4 +31,23 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test:integration
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      - id: e2e
+        run: pnpm test:e2e
+      - name: Upload synthetic profile screenshots
+        if: steps.e2e.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: task26-profile-disclosure-synthetic-pngs
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            .cache/task26-system-id-settings-390x844.png
+            .cache/task5-r1-header-body-320x568.png
+            .cache/task5-r1-header-no-body-320x568.png
+            .cache/task26-system-id-card-320x568.png
+            .cache/task26-system-id-card-390x844.png
+            .cache/task26-system-id-card-440x900.png
+            .cache/task26-system-id-card-640x390.png
+            .cache/task5-r1-card-320x568.png
+            .cache/task5-r1-card-640x390.png
+            .cache/task5-r1-settings-feedback-390x844.png

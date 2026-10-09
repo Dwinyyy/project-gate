@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthActionError } from '@hunter-world/client';
 import { Icon } from '@hunter-world/ui';
 import { useAccountAuth } from './AuthProvider';
+import { useProfileInvitationMemory } from '../profile/ProfileInvitationProvider';
 import styles from '../App.module.css';
 
 function safeMessage(error: unknown): string {
@@ -13,6 +14,7 @@ function safeMessage(error: unknown): string {
 
 export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
   const { controller, auth } = useAccountAuth();
+  const invitation = useProfileInvitationMemory();
   const navigate = useNavigate();
   const location = useLocation();
   const routeState: unknown = location.state;
@@ -51,7 +53,7 @@ export function AccountAccess({ mode }: { mode: 'sign-in' | 'register' }) {
       } else {
         await controller.signIn(email, password);
         setPassword('');
-        navigate('/');
+        navigate(invitation.getSnapshot().token ? '/profile-invitation' : '/');
       }
     } catch (submitError) {
       setPassword('');

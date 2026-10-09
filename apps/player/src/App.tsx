@@ -13,6 +13,8 @@ import { useAccountAuth } from './auth/AuthProvider';
 import { useCharacterSession } from './character/useCharacterSession';
 import { CharacterSystem } from './character/CharacterSystem';
 import { BodyStatusDrawer } from './character/BodyStatusDrawer';
+import { CivilianId } from './profile/CivilianId';
+import { SharedProfile } from './profile/SharedProfile';
 import characterStyles from './character/Character.module.css';
 
 const navigation: { path: string; label: string; icon: IconName }[] = [
@@ -24,10 +26,12 @@ const navigation: { path: string; label: string; icon: IconName }[] = [
 ];
 
 const accountTitles: Record<string, string> = {
+  '/identity': 'System ID',
   '/account/sign-in': 'Sign in',
   '/account/register': 'Registration',
   '/account/recovery': 'Recovery',
   '/auth/callback': 'Verification',
+  '/profile-invitation': 'Shared profile',
 };
 
 const plannedScreens = {
@@ -73,14 +77,6 @@ const plannedScreens = {
     description:
       'Your character’s condition and recovery will be available in the body-status panel.',
     note: 'Body status is available after an eligible player creates a persistent character. Body resource measurements are not yet tracked.',
-  },
-  identity: {
-    title: 'System ID',
-    icon: 'identity',
-    eyebrow: 'AN IDENTITY OF YOUR OWN',
-    heading: 'Your story starts with an identity.',
-    description: 'Your System ID will present the identity and details you choose to share.',
-    note: 'Identity cards require a persistent character. No ID, rank, class, or invitation code has been generated.',
   },
 } satisfies Record<
   string,
@@ -338,7 +334,12 @@ export function App() {
     navigation.find((item) => item.path === location.pathname)?.label ??
     plannedScreens[location.pathname.slice(1) as keyof typeof plannedScreens]?.title ??
     accountTitles[location.pathname] ??
+    (location.pathname.startsWith('/profiles/') ? 'Shared profile' : undefined) ??
     'Page not found';
+  const validatedPlayer =
+    auth.phase === 'authenticated' &&
+    validation === 'valid' &&
+    session?.applicationRole === 'player';
 
   useEffect(() => {
     document.title = `${currentTitle} · Hunter World`;
@@ -457,6 +458,17 @@ export function App() {
                 <Icon name="body" />
               </button>
             ) : null}
+            {validatedPlayer ? (
+              <Link
+                to="/identity"
+                className={styles.systemIdLink}
+                aria-label="System ID"
+                aria-current={location.pathname === '/identity' ? 'page' : undefined}
+              >
+                <Icon name="identity" />
+                <span>System ID</span>
+              </Link>
+            ) : null}
             <AccountControl />
           </div>
         </header>
@@ -477,6 +489,9 @@ export function App() {
             {Object.entries(plannedScreens).map(([path, screen]) => (
               <Route key={path} path={`/${path}`} element={<PlannedScreen screen={screen} />} />
             ))}
+            <Route path="/identity" element={<CivilianId />} />
+            <Route path="/profile-invitation" element={<SharedProfile kind="invitation" />} />
+            <Route path="/profiles/:publicReference" element={<PublicSharedProfile />} />
             <Route path="/account/sign-in" element={<AccountAccess mode="sign-in" />} />
             <Route path="/account/register" element={<AccountAccess mode="register" />} />
             <Route path="/account/recovery" element={<Recovery />} />
@@ -517,4 +532,9 @@ export function App() {
       </div>
     </div>
   );
+}
+
+function PublicSharedProfile() {
+  const reference = window.location.pathname.split('/').at(-1);
+  return <SharedProfile kind="public" publicReference={reference ?? ''} />;
 }
